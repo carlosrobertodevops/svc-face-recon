@@ -1,6 +1,5 @@
 # app/repository.py
-from __future__ import annotations
-from typing import Optional
+from typing import Optional, Union
 import numpy as np
 import psycopg
 from .config import settings
@@ -10,10 +9,7 @@ def get_conn():
     return psycopg.connect(settings.DATABASE_URL)
 
 
-def upsert_member_embedding(member_id: str, embedding: np.ndarray) -> None:
-    """
-    Salva/atualiza o embedding (vector(512)) em member_faces.
-    """
+def upsert_member_embedding(member_id: Union[int, str], embedding: np.ndarray) -> None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -22,16 +18,16 @@ def upsert_member_embedding(member_id: str, embedding: np.ndarray) -> None:
             on conflict (member_id)
             do update set embedding = excluded.embedding, updated_at = now();
             """,
-            (member_id, embedding.tolist()),
+            (int(member_id), embedding.tolist()),
         )
 
 
 def fetch_all_embeddings() -> list[tuple[str, np.ndarray]]:
-    out: list[tuple[str, np.ndarray]] = []
+    out = []
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("select member_id, embedding from member_faces;")
         for mid, emb in cur.fetchall():
-            out.append((str(mid), np.array(emb, dtype=np.float32)))
+            out.append((str(int(mid)), np.array(emb, dtype=np.float32)))
     return out
 
 

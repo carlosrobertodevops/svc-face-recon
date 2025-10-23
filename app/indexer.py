@@ -1,4 +1,3 @@
-# app/indexer.py
 from __future__ import annotations
 from typing import Dict, Tuple, Optional, List
 import numpy as np
@@ -16,10 +15,6 @@ from .utils import (
 
 
 class InMemoryIndex:
-    """
-    Cache simples em memória (member_id -> embedding).
-    """
-
     def __init__(self):
         self.embeddings: Dict[str, np.ndarray] = {}
 
@@ -42,38 +37,40 @@ class InMemoryIndex:
 mem_index = InMemoryIndex()
 
 
-def _normalize_sources_from_fotos_path(
-    fotos_path: Optional[List[str]],
-) -> List[tuple[str, str]]:
+def _normalize_sources_from_photos_field(photos_value) -> List[tuple[str, str]]:
     """
-    Converte a coluna fotos_path (varchar[]) em uma lista de fontes.
-    Cada item vira uma tupla (kind, value):
-      - ("storage", "membros/abc.jpg")
-      - ("url",     "https://.../arquivo.jpg")
+    Converte o campo de fotos (pode ser string única OU lista de strings) em fontes:
+      - ("storage", "membros/abc.jpg")  ou
+      - ("url", "https://...")
     Regras:
-      * se string parecer URL pública do Supabase -> vira ("storage", relpath)
-      * se começar com "membros/" -> ("storage", str)
-      * senão -> assume URL genérica ("url", str)
+      * URL pública do Supabase -> ("storage", relpath)
+      * começa com "membros/"      -> storage
+      * começa com "uploads/membros/" -> vira storage removendo 'uploads/'
+      * caso contrário -> url
     """
+    values: List[str] = []
+    if photos_value is None:
+        return []
+    if isinstance(photos_value, list):
+        values = photos_value
+    else:
+        values = [str(photos_value)]
+
     out: List[tuple[str, str]] = []
-    if not fotos_path:
-        return out
-    for s in fotos_path:
+    for s in values:
         s = (s or "").strip()
         if not s:
             continue
         parsed = public_url_to_storage_path(s)
         if parsed:
             bucket, rel = parsed
-            # só indexamos o que está dentro do bucket esperado
             if bucket == settings.SUPABASE_STORAGE_BUCKET:
                 out.append(("storage", rel))
                 continue
         if s.lower().startswith("membros/"):
             out.append(("storage", s))
         elif s.lower().startswith("uploads/membros/"):
-            # às vezes salvam com bucket no início
-            rel = s.split("uploads/", 1)[1]  # membros/xxx.jpg
+            rel = s.split("uploads/", 1)[1]  # "membros/xxx.jpg"
             out.append(("storage", rel))
         else:
             out.append(("url", s))
@@ -81,9 +78,6 @@ def _normalize_sources_from_fotos_path(
 
 
 def _avg_normalize(embs: List[np.ndarray]) -> Optional[np.ndarray]:
-    """
-    Faz média e normaliza (L2). Retorna None se lista vazia.
-    """
     if not embs:
         return None
     M = np.stack(embs, axis=0).astype(np.float32)
@@ -95,38 +89,29 @@ def _avg_normalize(embs: List[np.ndarray]) -> Optional[np.ndarray]:
 
 
 def build_index_from_members() -> dict:
-    """
-    1) Lê public.membros (id, name, fotos_path::varchar[])
-    2) Para cada membro, tenta baixar e extrair embeddings de MULTIPLAS fotos.
-    3) Faz média dos embeddings e salva em member_faces (pgvector).
-    4) Reconstrói cache em memória.
-    """
     sb = get_supabase()
-    # fotos_path é varchar[]; o SDK já entrega como list[str]
-    resp = sb.table("membros").select("id, name, fotos_path").execute()
+
+    # Monta seleção dinâmica com base nas envs
+    sel_cols = f"{settings.MEMBERS_ID_COLUMN}, {settings.MEMBERS_NAME_COLUMN}, {settings.MEMBERS_PHOTOS_COLUMN}"
+    resp = sb.table(settings.MEMBERS_TABLE).select(sel_cols).execute()
     rows = resp.data or []
 
     total = len(rows)
     indexed = 0
 
     for m in rows:
-        mid = str(m["id"])
-        fotos_path = m.get("fotos_path")  # pode vir None ou []
-        sources = _normalize_sources_from_fotos_path(fotos_path)
-
+        mid = str(m[settings.MEMBERS_ID_COLUMN])
+        photos_val = m.get(settings.MEMBERS_PHOTOS_COLUMN)
+        sources = _normalize_sources_from_photos_field(photos_val)
         if not sources:
-            # sem foto -> pula
             continue
 
         embeddings: List[np.ndarray] = []
-
         for kind, value in sources:
             try:
                 if kind == "storage":
-                    # value = "membros/xyz.jpg"
                     b = fetch_bytes_from_supabase_path(value)
                 else:
-                    # URL genérica (pública/assinada)
                     b = fetch_bytes_from_url(value)
                 img = load_image_from_bytes(b)
                 faces = face_engine.extract_embeddings(img, max_faces=1)
@@ -138,7 +123,6 @@ def build_index_from_members() -> dict:
         emb_avg = _avg_normalize(embeddings)
         if emb_avg is None:
             continue
-
         try:
             upsert_member_embedding(mid, emb_avg)
             indexed += 1

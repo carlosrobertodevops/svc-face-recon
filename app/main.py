@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 from typing import Optional, Dict, Any, List, Tuple
 
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -18,7 +20,6 @@ from .utils import (
     fetch_bytes_from_url,
 )
 from .face_engine import face_engine
-
 
 # -----------------------------------------------------------------------------
 # Utilidades internas
@@ -71,7 +72,6 @@ async def _extract_single_embedding(img_bytes: bytes) -> Optional[List[float]]:
 
 def _distance(emb_a: List[float], emb_b: List[float]) -> float:
     """Distância (1 - dot) para vetores L2-normalizados."""
-    # dot
     s = 0.0
     for x, y in zip(emb_a, emb_b):
         s += float(x) * float(y)
@@ -99,13 +99,30 @@ def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
 
 
 # -----------------------------------------------------------------------------
-# Modelos (mantendo os esquemas que aparecem no seu Swagger)
+# Modelos (mantendo a compatibilidade com o seu Swagger)
 # -----------------------------------------------------------------------------
+
+
+class IndexProgress(BaseModel):
+    """Detalhes do progresso do /index."""
+
+    started_at: int = Field(..., description="epoch seconds do início da indexação")
+    duration_sec: int = Field(..., description="duração total em segundos")
+
+
+class IndexResult(BaseModel):
+    total: int = 0
+    indexed: int = 0
+    skipped_no_photo: int = 0
+    skipped_no_face: int = 0
+    errors: int = 0
+    cache_reloaded: bool = False
+    progress: Optional[IndexProgress] = None  # opcional
 
 
 class IndexResponse(BaseModel):
     ok: bool
-    result: Optional[Dict[str, int]] = None
+    result: Optional[IndexResult] = None
     error: Optional[str] = None
 
 
@@ -128,7 +145,7 @@ class IdentityCandidate(BaseModel):
 class IdentityResponse(BaseModel):
     ok: bool
     threshold: float
-    candidates: List[IdentityCandidate] = []
+    candidates: List[IdentityCandidate] = Field(default_factory=list)
 
 
 class EnrollRequest(BaseModel):
@@ -201,15 +218,32 @@ async def live():
 
 @app.get("/health", tags=["ops"])
 async def health():
-    """Health + DB ping."""
+    """Health + DB ping (e Redis, se configurado)."""
+    out: Dict[str, Any] = {"ok": True}
+    # DB
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
                 cur.fetchone()
-        return {"ok": True}
+        out["db"] = "ok"
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        out["ok"] = False
+        out["db"] = f"error: {e}"
+
+    # Redis opcional (se REDIS_URL definido)
+    if settings.REDIS_URL:
+        try:
+            import redis
+
+            r = redis.from_url(settings.REDIS_URL, decode_responses=True)
+            r.ping()
+            out["redis"] = "ok"
+        except Exception as e:
+            out["ok"] = False
+            out["redis"] = f"error: {e}"
+
+    return out
 
 
 @app.get("/ready", tags=["ops"])
@@ -229,6 +263,7 @@ async def ops_status():
         "db_url_host_hint": settings.DATABASE_URL.split("@")[-1].split("/")[0]
         if "@" in settings.DATABASE_URL
         else settings.DATABASE_URL,
+        "redis": bool(settings.REDIS_URL),
     }
 
 
@@ -242,8 +277,20 @@ async def index_all():
     """
     Reindexa a partir do Supabase: baixa fotos, gera embeddings, salva no Postgres e recarrega o cache.
     """
+    started = int(time.time())
     try:
-        result = await build_index_from_members()
+        raw = await build_index_from_members()
+        result = IndexResult(
+            total=int(raw.get("total", 0)),
+            indexed=int(raw.get("indexed", 0)),
+            skipped_no_photo=int(raw.get("skipped_no_photo", 0)),
+            skipped_no_face=int(raw.get("skipped_no_face", 0)),
+            errors=int(raw.get("errors", 0)),
+            cache_reloaded=bool(raw.get("cache_reloaded", False)),
+            progress=IndexProgress(
+                started_at=started, duration_sec=int(time.time()) - started
+            ),
+        )
         return IndexResponse(ok=True, result=result)
     except Exception as e:
         return IndexResponse(ok=False, error=str(e))
@@ -265,7 +312,8 @@ async def enroll(req: EnrollRequest):
             raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
 
         # salva no banco
-        upsert_member_embedding(req.member_id, face_engine.to_numpy(emb))
+        vec = np.asarray(emb, dtype=np.float32)
+        upsert_member_embedding(req.member_id, vec)
         # recarrega cache
         mem_index.rebuild()
 
@@ -292,8 +340,7 @@ async def identity(req: IdentityRequest):
         if emb is None:
             return IdentityResponse(ok=False, threshold=thr, candidates=[])
 
-        # varredura no cache
-        # distância = 1 - dot
+        # varredura no cache — distância = 1 - dot
         cands: List[Tuple[str, float]] = []
         for mid, ref in mem_index.embeddings.items():
             d = _distance(emb, ref.tolist())
@@ -325,7 +372,6 @@ async def verify(req: VerifyRequest):
     """
     thr = float(settings.FACE_RECOGNITION_THRESHOLD)
     try:
-        # precisa existir no cache
         ref = mem_index.embeddings.get(req.member_id)
         if ref is None:
             raise HTTPException(
@@ -400,6 +446,15 @@ async def compare(req: CompareRequest):
 async def on_startup():
     # pequeno atraso para cenários locais
     await asyncio.sleep(1.5)
+    try:
+        # tenta tocar no DB (evita queda de readiness em orquestradores)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                cur.fetchone()
+    except Exception as e:
+        print(f"[WARN] Health DB falhou no startup: {e}")
+
     try:
         mem_index.rebuild()
         print("[INFO] Índice em memória carregado a partir do banco.")

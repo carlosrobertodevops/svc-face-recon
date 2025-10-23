@@ -1,115 +1,72 @@
-name: "svc-face-recon"
+name: svc-face-recon-coolify
 
 services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: svc-face-recon-db
+    env_file:
+      - .env.coolify
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Pwdsvcfacerecon}
+      POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
+    volumes:
+      - /data/svc-face-recon/pg:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [appnet]
+
+  db-init:
+    image: postgres:16-alpine
+    container_name: svc-face-recon-db-init
+    env_file:
+      - .env.coolify
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "
+      export PGPASSWORD='${POSTGRES_PASSWORD:-Pwdsvcfacerecon}' &&
+      psql -v ON_ERROR_STOP=1 -h db -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}
+      -c \"CREATE EXTENSION IF NOT EXISTS vector;\"
+      -c \"CREATE TABLE IF NOT EXISTS member_faces (
+            member_id text PRIMARY KEY,
+            embedding vector(512) NOT NULL
+          );\"
+      "
+    restart: "no"
+    networks: [appnet]
+
   svc-face-recon:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # Evita tentar "pull": força build local quando precisar
-    pull_policy: build
+    image: ${APP_IMAGE:-svc-face-recon:latest}
+    # ou build:
+    # build:
+    #   context: .
     container_name: svc-face-recon
     env_file:
-      - .env.local
+      - .env.coolify
     environment:
-      - DD_TRACE_ENABLED=false
-      - DD_ENV=local
-      - DD_SERVICE=svc-face-recon
-      - DD_VERSION=v1
-    ports:
-      - "8000:8000"
-    volumes:
-      - models-cache:/models
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
+      HOST: ${HOST:-0.0.0.0}
+      PORT: ${PORT:-8000}
     depends_on:
-      - prometheus
-      - grafana
-      - cadvisor
-      - node-exporter
-    restart: unless-stopped
-    profiles: ["app", "obs"] # sobe com --profile app (ou obs)
-
-  # ---- Prometheus ----
-  prometheus:
-    image: prom/prometheus:v2.55.1
-    container_name: prometheus
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-    ports:
-      - "9090:9090"
+      - /data/svc-face-recon/insightface:/root/.insightface
     restart: unless-stopped
-    profiles: ["obs"]
+    networks: [appnet]
 
-  # ---- Grafana ----
-  grafana:
-    image: grafana/grafana:11.2.0
-    container_name: grafana
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning
-    ports:
-      - "3000:3000"
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-    profiles: ["obs"]
-
-  # ---- cAdvisor ----
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.2
-    container_name: cadvisor
-    privileged: true
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-    ports:
-      - "8080:8080"
-    restart: unless-stopped
-    profiles: ["obs"]
-
-  # ---- node-exporter ----
-  node-exporter:
-    image: prom/node-exporter:v1.8.2
-    container_name: node-exporter
-    pid: host
-    network_mode: bridge
-    ports:
-      - "9100:9100"
-    restart: unless-stopped
-    profiles: ["obs"]
-
-  # ---- Datadog (opcional) ----
-  datadog:
-    image: gcr.io/datadoghq/agent:7
-    container_name: datadog-agent
-    environment:
-      - DD_API_KEY=${DD_API_KEY} # defina no shell ou .env.local se for usar
-      - DD_SITE=datadoghq.com
-      - DD_ENV=local
-      - DD_APM_ENABLED=true
-      - DD_LOGS_ENABLED=true
-      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
-      - DD_PROCESS_AGENT_ENABLED=true
-      - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /proc/:/host/proc/:ro
-      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
-    ports:
-      - "8126:8126"
-      - "4318:4318"
-    restart: unless-stopped
-    profiles: ["dd"] # só sobe se você pedir --profile dd
-
-volumes:
-  models-cache:
+networks:
+  appnet:
+    driver: bridge

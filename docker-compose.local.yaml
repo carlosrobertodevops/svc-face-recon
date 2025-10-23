@@ -15,7 +15,6 @@ services:
       - "5432:5432"
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
-      - ./db-init/01_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
     healthcheck:
       test:
         [
@@ -28,6 +27,29 @@ services:
     restart: unless-stopped
     networks: [monitoring]
 
+  # --- INIT DO BANCO (cria extensão + tabela) ---
+  db-init:
+    image: postgres:16-alpine
+    container_name: svc-face-recon-db-init
+    env_file:
+      - .env.local
+    depends_on:
+      db:
+        condition: service_healthy
+    # Tudo embutido aqui (sem arquivo .sql externo)
+    command: >
+      sh -c "
+      export PGPASSWORD='${POSTGRES_PASSWORD:-Pwdsvcfacerecon}' &&
+      psql -v ON_ERROR_STOP=1 -h db -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}
+      -c \"CREATE EXTENSION IF NOT EXISTS vector;\"
+      -c \"CREATE TABLE IF NOT EXISTS member_faces (
+            member_id text PRIMARY KEY,
+            embedding vector(512) NOT NULL
+          );\"
+      "
+    restart: "no"
+    networks: [monitoring]
+
   # -------------------- APP --------------------
   svc-face-recon:
     build:
@@ -38,13 +60,15 @@ services:
     env_file:
       - .env.local
     environment:
-      # Banco local (para embeddings)
+      # Banco local (para embeddings) – SEM ssl em dev
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped

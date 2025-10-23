@@ -1,0 +1,32 @@
+name: svc-face-recon
+services:
+  svc-face-recon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: svc-face-recon:local
+    container_name: svc-face-recon-local
+    env_file:
+      - .env.local
+    ports:
+      - "8000:8000"
+    volumes:
+      - models-cache:/models # cache de modelos InsightFace/ONNX
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2g"
+        reservations:
+          cpus: "0.5"
+          memory: "512m"
+
+volumes:
+  models-cache:

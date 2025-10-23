@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  svc-face-recon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: svc-face-recon:coolify
+    container_name: svc-face-recon
+    # Em produção, prefira definir as variáveis na UI da Coolify (Secrets/Env)
+    # Deixe esta linha comentada ou use um .env.coolify local apenas para testes:
+    # env_file:
+    #   - .env.coolify
+    environment:
+      SERVICE_NAME: "svc-face-recon"
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      # As variáveis abaixo devem ser definidas como SECRETS na Coolify:
+      # SUPABASE_URL: "<set-in-coolify>"
+      # SUPABASE_SERVICE_ROLE_KEY: "<set-in-coolify>"
+      # SUPABASE_STORAGE_BUCKET: "profiles"
+      # DATABASE_URL: "<set-in-coolify>"
+      # FACE_RECOGNITION_THRESHOLD: "0.35"
+      # MAX_FACES_PER_IMAGE: "5"
+    volumes:
+      - models-cache:/models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    # Coolify injeta sua própria rede e proxy; não exponha 'ports'.
+    # O domínio/rota é configurado na interface da Coolify apontando para a porta 8000 do serviço.
+
+volumes:
+  models-cache:

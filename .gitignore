@@ -1,5 +1,6 @@
 #.env.local
 #.env
+db-init/
 .cache/insightface/models
 _data/*
 observability/grafana/data

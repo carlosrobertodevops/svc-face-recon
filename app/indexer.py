@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Dict, Tuple, Optional, List
 import numpy as np
+import asyncio
+import traceback
 
 from .supabase_client import get_supabase
 from .config import settings
@@ -15,13 +17,20 @@ from .utils import (
 
 
 class InMemoryIndex:
+    """Índice em memória para busca rápida de embeddings."""
+
     def __init__(self):
         self.embeddings: Dict[str, np.ndarray] = {}
 
     def rebuild(self):
+        """Recarrega embeddings armazenados no banco (pgvector)."""
         self.embeddings = {mid: emb for (mid, emb) in fetch_all_embeddings()}
+        print(
+            f"[INFO] Índice reconstruído: {len(self.embeddings)} embeddings carregados."
+        )
 
     def top1(self, query: np.ndarray) -> Optional[Tuple[str, float]]:
+        """Busca o embedding mais próximo (menor distância)."""
         if not self.embeddings:
             return None
         best_id, best_dist = None, 9e9
@@ -42,13 +51,7 @@ def _normalize_sources_from_photos_field(photos_value) -> List[tuple[str, str]]:
     Converte o campo de fotos (pode ser string única OU lista de strings) em fontes:
       - ("storage", "membros/abc.jpg")  ou
       - ("url", "https://...")
-    Regras:
-      * URL pública do Supabase -> ("storage", relpath)
-      * começa com "membros/"      -> storage
-      * começa com "uploads/membros/" -> vira storage removendo 'uploads/'
-      * caso contrário -> url
     """
-    values: List[str] = []
     if photos_value is None:
         return []
     if isinstance(photos_value, list):
@@ -70,7 +73,7 @@ def _normalize_sources_from_photos_field(photos_value) -> List[tuple[str, str]]:
         if s.lower().startswith("membros/"):
             out.append(("storage", s))
         elif s.lower().startswith("uploads/membros/"):
-            rel = s.split("uploads/", 1)[1]  # "membros/xxx.jpg"
+            rel = s.split("uploads/", 1)[1]
             out.append(("storage", rel))
         else:
             out.append(("url", s))
@@ -78,6 +81,7 @@ def _normalize_sources_from_photos_field(photos_value) -> List[tuple[str, str]]:
 
 
 def _avg_normalize(embs: List[np.ndarray]) -> Optional[np.ndarray]:
+    """Faz a média e normaliza embeddings de uma mesma pessoa."""
     if not embs:
         return None
     M = np.stack(embs, axis=0).astype(np.float32)
@@ -89,45 +93,61 @@ def _avg_normalize(embs: List[np.ndarray]) -> Optional[np.ndarray]:
 
 
 def build_index_from_members() -> dict:
+    """Lê a tabela de membros do Supabase, baixa suas fotos, extrai embeddings e grava no banco local."""
     sb = get_supabase()
-
-    # Monta seleção dinâmica com base nas envs
     sel_cols = f"{settings.MEMBERS_ID_COLUMN}, {settings.MEMBERS_NAME_COLUMN}, {settings.MEMBERS_PHOTOS_COLUMN}"
     resp = sb.table(settings.MEMBERS_TABLE).select(sel_cols).execute()
     rows = resp.data or []
 
     total = len(rows)
     indexed = 0
+    print(f"[INFO] Iniciando indexação de {total} membros...")
 
     for m in rows:
         mid = str(m[settings.MEMBERS_ID_COLUMN])
+        name = m.get(settings.MEMBERS_NAME_COLUMN, "(sem nome)")
         photos_val = m.get(settings.MEMBERS_PHOTOS_COLUMN)
         sources = _normalize_sources_from_photos_field(photos_val)
         if not sources:
+            print(f"[WARN] Membro {mid} ({name}) sem fotos.")
             continue
 
         embeddings: List[np.ndarray] = []
         for kind, value in sources:
             try:
+                # Executa corrotinas async de forma síncrona
                 if kind == "storage":
-                    b = fetch_bytes_from_supabase_path(value)
+                    b = asyncio.run(fetch_bytes_from_supabase_path(value))
                 else:
-                    b = fetch_bytes_from_url(value)
+                    b = asyncio.run(fetch_bytes_from_url(value))
+
+                if not b:
+                    print(f"[WARN] Foto vazia/indisponível: {value}")
+                    continue
+
                 img = load_image_from_bytes(b)
                 faces = face_engine.extract_embeddings(img, max_faces=1)
                 if faces:
                     embeddings.append(faces[0]["embedding"])
+                else:
+                    print(f"[WARN] Nenhum rosto detectado em {value}")
+
             except Exception as e:
                 print(f"[WARN] member {mid} foto '{value}': {e}")
+                traceback.print_exc()
 
         emb_avg = _avg_normalize(embeddings)
         if emb_avg is None:
+            print(f"[WARN] Membro {mid} ({name}) sem embedding válido.")
             continue
+
         try:
             upsert_member_embedding(mid, emb_avg)
             indexed += 1
         except Exception as e:
             print(f"[WARN] member {mid} upsert: {e}")
+            traceback.print_exc()
 
     mem_index.rebuild()
+    print(f"[INFO] Indexação concluída. {indexed}/{total} membros processados.")
     return {"indexed": indexed, "total": total}

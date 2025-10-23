@@ -1,2 +1,6 @@
 #.env.local
 #.env
+.cache/insightface/models
+_data/*
+observability/grafana/data
+observability/prometheus/data

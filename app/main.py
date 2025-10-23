@@ -46,6 +46,7 @@ TAGS_METADATA = [
     },
 ]
 
+
 app = FastAPI(
     title=f"{settings.SERVICE_NAME}",
     version="v1.0.0",
@@ -55,7 +56,8 @@ app = FastAPI(
 )
 app.openapi_tags = TAGS_METADATA
 
-# CORS (restrinja em produção)
+
+# ------------------- MIDDLEWARES -------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,7 +67,7 @@ app.add_middleware(
 )
 
 
-# ---------- OPS ----------
+# ------------------- OPS ENDPOINTS -------------------
 @app.get(
     "/live",
     tags=["ops"],
@@ -104,17 +106,35 @@ async def ops_status():
     }
 
 
-# ---------- FACE ----------
+# ------------------- FACE ENDPOINTS -------------------
 @app.post(
     "/index",
     response_model=IndexResponse,
     tags=["face"],
-    summary="Reindexar membros a partir do Storage",
-    description="Lê `members(id, photo_path)` e salva embeddings em `member_faces` (pgvector). Reconstrói cache.",
+    summary="Reindexar membros a partir do Storage/DB",
+    description=(
+        "Lê a tabela configurada (ex.: `public.membros`) com a coluna de fotos (ex.: `fotos_path`), "
+        "baixa as imagens do Storage (bucket configurado), gera embeddings (média por membro) e salva em `member_faces` (pgvector). "
+        "Ao final, reconstrói o cache em memória para consultas rápidas."
+    ),
 )
 async def index_all():
-    result = build_index_from_members()
-    return IndexResponse(**result)
+    try:
+        result = build_index_from_members()
+        return IndexResponse(**result)
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        # 🔥 Retorna JSON detalhado com endpoint + mensagem de erro
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "endpoint": "/index",
+                "error": str(e),
+                "hint": "Verifique variáveis de ambiente MEMBERS_* e a conexão com o banco/Storage.",
+            },
+        )
 
 
 @app.post(
@@ -124,7 +144,7 @@ async def index_all():
     description="Gera embedding de uma imagem (file, image_url ou supabase_path) e salva em `member_faces`.",
 )
 async def enroll(
-    member_id: str = Form(..., description="ID do membro (uuid/int)"),
+    member_id: str = Form(..., description="ID do membro (uuid/int/bigint)"),
     file: UploadFile | None = File(None, description="Arquivo de imagem (JPEG/PNG)"),
     image_url: Optional[str] = Form(None, description="URL pública/assinada"),
     supabase_path: Optional[str] = Form(
@@ -138,7 +158,10 @@ async def enroll(
     if not faces:
         raise HTTPException(status_code=400, detail="Nenhum rosto detectado na imagem.")
     emb = faces[0]["embedding"]
-    upsert_member_embedding(member_id, emb)
+    try:
+        upsert_member_embedding(int(member_id), emb)
+    except Exception:
+        upsert_member_embedding(member_id, emb)
     mem_index.rebuild()
     return {"member_id": member_id, "status": "enrolled"}
 
@@ -177,6 +200,7 @@ async def identify(
 
         top = mem_index.top1(q)
         if not top:
+            # fallback DB
             res = search_top1(q)
             if not res:
                 return IdentifyResponse(member_id=None, distance=None, matched=False)
@@ -199,10 +223,7 @@ async def identify(
 )
 async def verify(
     req: VerifyRequest = Body(
-        example={
-            "member_id": "00000000-0000-0000-0000-000000000000",
-            "supabase_path": "membros/123.jpg",
-        },
+        example={"member_id": "242", "supabase_path": "membros/123.jpg"},
         description="Informe `member_id` e a fonte da imagem.",
     ),
     file: UploadFile | None = File(None, description="Arquivo de imagem (opcional)"),
@@ -231,10 +252,12 @@ async def verify(
         else:
             found_id, distance = top
 
-        matched = (found_id == req.member_id) and (
+        matched = (str(found_id) == str(req.member_id)) and (
             distance <= settings.FACE_RECOGNITION_THRESHOLD
         )
-        return IdentifyResponse(member_id=found_id, distance=distance, matched=matched)
+        return IdentifyResponse(
+            member_id=str(found_id), distance=distance, matched=matched
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -299,8 +322,6 @@ async def compare(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# Docs custom
+# ------------------- DOCS & METRICS -------------------
 mount_docs_routes(app)
-
-# /metrics (Prometheus)
 Instrumentator().instrument(app).expose(app, include_in_schema=False)

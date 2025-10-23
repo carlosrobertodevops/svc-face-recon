@@ -1,63 +1,185 @@
-# app/main.py
 from __future__ import annotations
-import os
-from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
+import asyncio
+import base64
+from typing import Optional, Dict, Any, List, Tuple
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from PIL import Image
-from prometheus_fastapi_instrumentator import Instrumentator
-
-# Datadog APM (opcional)
-if os.getenv("DD_TRACE_ENABLED", "false").lower() in ("1", "true", "yes"):
-    from ddtrace import patch, tracer
-
-    patch(fastapi=True, httpx=True, psycopg=True)
-    tracer.set_tags(
-        {
-            "service.name": os.getenv("DD_SERVICE", "svc-face-recon"),
-            "env": os.getenv("DD_ENV", "local"),
-            "version": os.getenv("DD_VERSION", "v1"),
-        }
-    )
+from pydantic import BaseModel, Field
 
 from .config import settings
-from .schemas import IdentifyRequest, IdentifyResponse, VerifyRequest, IndexResponse
-from .utils import resolve_image_source, load_image_from_bytes, image_to_data_url
-from .face_engine import face_engine, FaceEngine
-from .repository import search_top1, upsert_member_embedding
-from .indexer import build_index_from_members, mem_index
-from .docs import mount_docs_routes
+from .indexer import mem_index, build_index_from_members
+from .repository import get_conn, upsert_member_embedding
+from .supabase_client import get_supabase
+from .utils import (
+    load_image_from_bytes,
+    fetch_bytes_from_supabase_path,
+    fetch_bytes_from_url,
+)
+from .face_engine import face_engine
 
 
-def crop_from_bbox(img: Image.Image, bbox):
-    x1, y1, x2, y2 = map(int, bbox)
-    x1, y1 = max(0, x1), max(0, y1)
-    x2, y2 = min(img.width, x2), min(img.height, y2)
-    return img.crop((x1, y1, x2, y2))
+# -----------------------------------------------------------------------------
+# Utilidades internas
+# -----------------------------------------------------------------------------
 
 
-TAGS_METADATA = [
-    {"name": "ops", "description": "Operações de saúde/diagnóstico do serviço."},
-    {
-        "name": "face",
-        "description": "Reconhecimento facial: indexação, identificação, verificação e comparação.",
-    },
-]
+async def _maybe_await(v):
+    """Aceita funções sync ou async (compatível com suas utils)."""
+    if hasattr(v, "__await__"):
+        return await v
+    return v
 
+
+async def _fetch_image_bytes(
+    *,
+    supabase_path: Optional[str] = None,
+    image_url: Optional[str] = None,
+    image_b64: Optional[str] = None,
+) -> bytes:
+    """Padroniza as entradas de imagem."""
+    if supabase_path:
+        b = await _maybe_await(fetch_bytes_from_supabase_path(supabase_path))
+        if not b:
+            raise ValueError("Falha ao obter bytes do Supabase Storage")
+        return b
+    if image_url:
+        b = await _maybe_await(fetch_bytes_from_url(image_url))
+        if not b:
+            raise ValueError("Falha ao baixar URL da imagem")
+        return b
+    if image_b64:
+        try:
+            return base64.b64decode(image_b64, validate=True)
+        except Exception as e:
+            raise ValueError(f"Base64 inválido: {e}")
+    raise ValueError("Forneça supabase_path, image_url ou image_b64")
+
+
+async def _extract_single_embedding(img_bytes: bytes) -> Optional[List[float]]:
+    """Extrai um único embedding (normalizado) como lista de float."""
+    img = load_image_from_bytes(img_bytes)
+    faces = face_engine.extract_embeddings(img, max_faces=1)
+    if not faces:
+        return None
+    emb = faces[0]["embedding"]
+    if emb is None:
+        return None
+    return emb.astype("float32").tolist()
+
+
+def _distance(emb_a: List[float], emb_b: List[float]) -> float:
+    """Distância (1 - dot) para vetores L2-normalizados."""
+    # dot
+    s = 0.0
+    for x, y in zip(emb_a, emb_b):
+        s += float(x) * float(y)
+    return float(1.0 - s)
+
+
+def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
+    """Busca nome no Supabase, se quiser enriquecer /identify e /verify."""
+    try:
+        sb = get_supabase()
+        sel = f"{settings.MEMBERS_NAME_COLUMN}"
+        resp = (
+            sb.table(settings.MEMBERS_TABLE)
+            .select(sel)
+            .eq(settings.MEMBERS_ID_COLUMN, member_id)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        if rows:
+            return rows[0].get(settings.MEMBERS_NAME_COLUMN)
+    except Exception:
+        pass
+    return None
+
+
+# -----------------------------------------------------------------------------
+# Modelos (mantendo os esquemas que aparecem no seu Swagger)
+# -----------------------------------------------------------------------------
+
+
+class IndexResponse(BaseModel):
+    ok: bool
+    result: Optional[Dict[str, int]] = None
+    error: Optional[str] = None
+
+
+class IdentityRequest(BaseModel):
+    supabase_path: Optional[str] = Field(
+        None, description="Caminho no bucket configurado"
+    )
+    image_url: Optional[str] = Field(None, description="URL pública da imagem")
+    image_b64: Optional[str] = Field(None, description="Imagem em Base64")
+    top_k: int = Field(1, ge=1, le=10, description="Quantos candidatos retornar")
+
+
+class IdentityCandidate(BaseModel):
+    member_id: str
+    distance: float
+    matched: bool
+    name: Optional[str] = None
+
+
+class IdentityResponse(BaseModel):
+    ok: bool
+    threshold: float
+    candidates: List[IdentityCandidate] = []
+
+
+class EnrollRequest(BaseModel):
+    member_id: str
+    supabase_path: Optional[str] = None
+    image_url: Optional[str] = None
+    image_b64: Optional[str] = None
+
+
+class VerifyRequest(BaseModel):
+    member_id: str
+    supabase_path: Optional[str] = None
+    image_url: Optional[str] = None
+    image_b64: Optional[str] = None
+
+
+class CompareRequest(BaseModel):
+    # imagem A
+    a_supabase_path: Optional[str] = None
+    a_image_url: Optional[str] = None
+    a_image_b64: Optional[str] = None
+    # imagem B
+    b_supabase_path: Optional[str] = None
+    b_image_url: Optional[str] = None
+    b_image_b64: Optional[str] = None
+
+
+class CompareResponse(BaseModel):
+    ok: bool
+    distance: float
+    threshold: float
+    is_same: bool
+
+
+# -----------------------------------------------------------------------------
+# FastAPI + CORS
+# -----------------------------------------------------------------------------
 
 app = FastAPI(
-    title=f"{settings.SERVICE_NAME}",
-    version="v1.0.0",
-    description="Microserviço de **reconhecimento facial** e processamento de imagem integrado ao Supabase (Storage + pgvector).",
-    openapi_url="/openapi.json",
-    docs_url=None,
+    title="svc-face-recon",
+    description="Microserviço de reconhecimento facial (Supabase Storage + pgvector).",
+    version="1.0.0",
+    openapi_tags=[
+        {"name": "ops", "description": "Operações de saúde/diagnóstico do serviço."},
+        {
+            "name": "face",
+            "description": "Reconhecimento facial: indexação, identificação, verificação e comparação.",
+        },
+    ],
 )
-app.openapi_tags = TAGS_METADATA
 
-
-# ------------------- MIDDLEWARES -------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -67,261 +189,219 @@ app.add_middleware(
 )
 
 
-# ------------------- OPS ENDPOINTS -------------------
-@app.get(
-    "/live",
-    tags=["ops"],
-    summary="Live",
-    description="Verifica se o processo está vivo.",
-)
+# -----------------------------------------------------------------------------
+# OPS
+# -----------------------------------------------------------------------------
+
+
+@app.get("/live", tags=["ops"])
 async def live():
-    return {"ok": True}
+    return {"status": "live"}
 
 
-@app.get(
-    "/health", tags=["ops"], summary="Health", description="Checagem simples de saúde."
-)
+@app.get("/health", tags=["ops"])
 async def health():
-    return {"status": "ok", "service": settings.SERVICE_NAME}
+    """Health + DB ping."""
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                cur.fetchone()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
-@app.get(
-    "/ready", tags=["ops"], summary="Ready", description="Pronto para receber tráfego?"
-)
+@app.get("/ready", tags=["ops"])
 async def ready():
-    return {"ready": True}
-
-
-@app.get(
-    "/ops/status",
-    tags=["ops"],
-    summary="Ops Status",
-    description="Informações operacionais resumidas.",
-)
-async def ops_status():
     return {
-        "service": settings.SERVICE_NAME,
-        "threshold": settings.FACE_RECOGNITION_THRESHOLD,
-        "max_faces": settings.MAX_FACES_PER_IMAGE,
+        "ready": True,
+        "cache_embeddings": len(mem_index.embeddings),
     }
 
 
-# ------------------- FACE ENDPOINTS -------------------
-@app.post(
-    "/index",
-    response_model=IndexResponse,
-    tags=["face"],
-    summary="Reindexar membros a partir do Storage/DB",
-    description=(
-        "Lê a tabela configurada (ex.: `public.membros`) com a coluna de fotos (ex.: `fotos_path`), "
-        "baixa as imagens do Storage (bucket configurado), gera embeddings (média por membro) e salva em `member_faces` (pgvector). "
-        "Ao final, reconstrói o cache em memória para consultas rápidas."
-    ),
-)
+@app.get("/ops/status", tags=["ops"])
+async def ops_status():
+    return {
+        "service": "svc-face-recon",
+        "threshold": settings.FACE_RECOGNITION_THRESHOLD,
+        "cache_embeddings": len(mem_index.embeddings),
+        "db_url_host_hint": settings.DATABASE_URL.split("@")[-1].split("/")[0]
+        if "@" in settings.DATABASE_URL
+        else settings.DATABASE_URL,
+    }
+
+
+# -----------------------------------------------------------------------------
+# FACE
+# -----------------------------------------------------------------------------
+
+
+@app.post("/index", response_model=IndexResponse, tags=["face"])
 async def index_all():
+    """
+    Reindexa a partir do Supabase: baixa fotos, gera embeddings, salva no Postgres e recarrega o cache.
+    """
     try:
-        result = build_index_from_members()
-        return IndexResponse(**result)
+        result = await build_index_from_members()
+        return IndexResponse(ok=True, result=result)
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        # 🔥 Retorna JSON detalhado com endpoint + mensagem de erro
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "endpoint": "/index",
-                "error": str(e),
-                "hint": "Verifique variáveis de ambiente MEMBERS_* e a conexão com o banco/Storage.",
-            },
-        )
+        return IndexResponse(ok=False, error=str(e))
 
 
-@app.post(
-    "/enroll",
-    tags=["face"],
-    summary="Cadastrar/atualizar embedding de um membro",
-    description="Gera embedding de uma imagem (file, image_url ou supabase_path) e salva em `member_faces`.",
-)
-async def enroll(
-    member_id: str = Form(..., description="ID do membro (uuid/int/bigint)"),
-    file: UploadFile | None = File(None, description="Arquivo de imagem (JPEG/PNG)"),
-    image_url: Optional[str] = Form(None, description="URL pública/assinada"),
-    supabase_path: Optional[str] = Form(
-        None, description="Caminho no Storage (ex: membros/123.jpg)"
-    ),
-):
-    file_bytes = await file.read() if file else None
-    img_bytes = await resolve_image_source(image_url, supabase_path, file_bytes)
-    img = load_image_from_bytes(img_bytes)
-    faces = face_engine.extract_embeddings(img, max_faces=1)
-    if not faces:
-        raise HTTPException(status_code=400, detail="Nenhum rosto detectado na imagem.")
-    emb = faces[0]["embedding"]
+@app.post("/enroll", tags=["face"])
+async def enroll(req: EnrollRequest):
+    """
+    Cadastra/atualiza o embedding de um membro a partir de uma imagem única.
+    """
     try:
-        upsert_member_embedding(int(member_id), emb)
-    except Exception:
-        upsert_member_embedding(member_id, emb)
-    mem_index.rebuild()
-    return {"member_id": member_id, "status": "enrolled"}
-
-
-@app.post(
-    "/identify",
-    response_model=IdentifyResponse,
-    tags=["face"],
-    summary="Identificar a pessoa mais provável",
-    description="Retorna `member_id` mais próximo, distância (cosine) e `matched` baseado no threshold.",
-)
-async def identify(
-    req: IdentifyRequest = Body(
-        example={"supabase_path": "membros/123.jpg"},
-        description="Fonte da imagem: `supabase_path` ou `image_url`. Alternativamente, envie como `file` multipart.",
-    ),
-    file: UploadFile | None = File(
-        None,
-        description="Arquivo de imagem (alternativa a `supabase_path`/`image_url`).",
-    ),
-):
-    file_bytes = await file.read() if file else None
-    try:
-        img_bytes = await resolve_image_source(
-            req.image_url, req.supabase_path, file_bytes
+        b = await _fetch_image_bytes(
+            supabase_path=req.supabase_path,
+            image_url=req.image_url,
+            image_b64=req.image_b64,
         )
-        img = load_image_from_bytes(img_bytes)
-        faces = face_engine.extract_embeddings(
-            img, max_faces=settings.MAX_FACES_PER_IMAGE
-        )
-        if not faces:
-            return IdentifyResponse(member_id=None, distance=None, matched=False)
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
 
-        face = max(faces, key=lambda f: f["det_score"])
-        q = face["embedding"]
+        # salva no banco
+        upsert_member_embedding(req.member_id, face_engine.to_numpy(emb))
+        # recarrega cache
+        mem_index.rebuild()
 
-        top = mem_index.top1(q)
-        if not top:
-            # fallback DB
-            res = search_top1(q)
-            if not res:
-                return IdentifyResponse(member_id=None, distance=None, matched=False)
-            member_id, distance = res
-        else:
-            member_id, distance = top
-
-        matched = distance <= settings.FACE_RECOGNITION_THRESHOLD
-        return IdentifyResponse(member_id=member_id, distance=distance, matched=matched)
+        return {"ok": True, "member_id": req.member_id}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post(
-    "/verify",
-    response_model=IdentifyResponse,
-    tags=["face"],
-    summary="Verificar se a imagem corresponde a um member_id",
-    description="Compara a imagem recebida com o `member_id` informado.",
-)
-async def verify(
-    req: VerifyRequest = Body(
-        example={"member_id": "242", "supabase_path": "membros/123.jpg"},
-        description="Informe `member_id` e a fonte da imagem.",
-    ),
-    file: UploadFile | None = File(None, description="Arquivo de imagem (opcional)"),
-):
-    file_bytes = await file.read() if file else None
+@app.post("/identify", response_model=IdentityResponse, tags=["face"])
+async def identity(req: IdentityRequest):
+    """
+    Identifica a pessoa mais provável (ou top_k candidatos) comparando contra o cache em memória.
+    """
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
     try:
-        img_bytes = await resolve_image_source(
-            req.image_url, req.supabase_path, file_bytes
+        b = await _fetch_image_bytes(
+            supabase_path=req.supabase_path,
+            image_url=req.image_url,
+            image_b64=req.image_b64,
         )
-        img = load_image_from_bytes(img_bytes)
-        faces = face_engine.extract_embeddings(
-            img, max_faces=settings.MAX_FACES_PER_IMAGE
-        )
-        if not faces:
-            return IdentifyResponse(member_id=None, distance=None, matched=False)
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            return IdentityResponse(ok=False, threshold=thr, candidates=[])
 
-        face = max(faces, key=lambda f: f["det_score"])
-        q = face["embedding"]
+        # varredura no cache
+        # distância = 1 - dot
+        cands: List[Tuple[str, float]] = []
+        for mid, ref in mem_index.embeddings.items():
+            d = _distance(emb, ref.tolist())
+            cands.append((mid, d))
 
-        top = mem_index.top1(q)
-        if not top:
-            res = search_top1(q)
-            if not res:
-                return IdentifyResponse(member_id=None, distance=None, matched=False)
-            found_id, distance = res
-        else:
-            found_id, distance = top
+        cands.sort(key=lambda x: x[1])
+        top = cands[: max(1, req.top_k)]
 
-        matched = (str(found_id) == str(req.member_id)) and (
-            distance <= settings.FACE_RECOGNITION_THRESHOLD
-        )
-        return IdentifyResponse(
-            member_id=str(found_id), distance=distance, matched=matched
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post(
-    "/compare",
-    tags=["face"],
-    summary="Comparar duas imagens (A vs B)",
-    description="Retorna distância cosine, `matched`, recortes base64 e metadados das duas faces.",
-)
-async def compare(
-    file_a: UploadFile | None = File(None, description="Imagem A"),
-    file_b: UploadFile | None = File(None, description="Imagem B"),
-    image_url_a: Optional[str] = Form(None, description="URL (A)"),
-    image_url_b: Optional[str] = Form(None, description="URL (B)"),
-    supabase_path_a: Optional[str] = Form(None, description="Storage path (A)"),
-    supabase_path_b: Optional[str] = Form(None, description="Storage path (B)"),
-):
-    try:
-        bA = await resolve_image_source(
-            image_url_a, supabase_path_a, await file_a.read() if file_a else None
-        )
-        bB = await resolve_image_source(
-            image_url_b, supabase_path_b, await file_b.read() if file_b else None
-        )
-
-        imgA, imgB = load_image_from_bytes(bA), load_image_from_bytes(bB)
-
-        facesA = face_engine.extract_embeddings(imgA, max_faces=1)
-        facesB = face_engine.extract_embeddings(imgB, max_faces=1)
-        if not facesA or not facesB:
-            return JSONResponse(
-                {"ok": False, "reason": "Rosto não detectado em uma das imagens."},
-                status_code=400,
+        out: List[IdentityCandidate] = []
+        for mid, dist in top:
+            out.append(
+                IdentityCandidate(
+                    member_id=mid,
+                    distance=dist,
+                    matched=dist <= thr,
+                    name=_fetch_member_name_from_supabase(mid),
+                )
             )
 
-        fA, fB = facesA[0], facesB[0]
-        dist = FaceEngine.cosine_distance(fA["embedding"], fB["embedding"])
+        return IdentityResponse(ok=True, threshold=thr, candidates=out)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        cropA = crop_from_bbox(imgA, fA["bbox"])
-        cropB = crop_from_bbox(imgB, fB["bbox"])
 
+@app.post("/verify", tags=["face"])
+async def verify(req: VerifyRequest):
+    """
+    Verifica se a imagem pertence ao `member_id` informado.
+    """
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        # precisa existir no cache
+        ref = mem_index.embeddings.get(req.member_id)
+        if ref is None:
+            raise HTTPException(
+                status_code=404, detail="member_id sem embedding no cache/banco."
+            )
+
+        b = await _fetch_image_bytes(
+            supabase_path=req.supabase_path,
+            image_url=req.image_url,
+            image_b64=req.image_b64,
+        )
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
+
+        dist = _distance(emb, ref.tolist())
         return {
             "ok": True,
+            "member_id": req.member_id,
+            "name": _fetch_member_name_from_supabase(req.member_id),
             "distance": dist,
-            "threshold": settings.FACE_RECOGNITION_THRESHOLD,
-            "matched": dist <= settings.FACE_RECOGNITION_THRESHOLD,
-            "faceA": {
-                "det_score": fA["det_score"],
-                "bbox": fA["bbox"],
-                "kps": fA["kps"],
-                "crop_base64": image_to_data_url(cropA),
-            },
-            "faceB": {
-                "det_score": fB["det_score"],
-                "bbox": fB["bbox"],
-                "kps": fB["kps"],
-                "crop_base64": image_to_data_url(cropB),
-            },
+            "threshold": thr,
+            "matched": dist <= thr,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ------------------- DOCS & METRICS -------------------
-mount_docs_routes(app)
-Instrumentator().instrument(app).expose(app, include_in_schema=False)
+@app.post("/compare", response_model=CompareResponse, tags=["face"])
+async def compare(req: CompareRequest):
+    """
+    Compara duas imagens (A vs B) e retorna distância e `is_same`.
+    """
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        a_bytes = await _fetch_image_bytes(
+            supabase_path=req.a_supabase_path,
+            image_url=req.a_image_url,
+            image_b64=req.a_image_b64,
+        )
+        b_bytes = await _fetch_image_bytes(
+            supabase_path=req.b_supabase_path,
+            image_url=req.b_image_url,
+            image_b64=req.b_image_b64,
+        )
+
+        emb_a = await _extract_single_embedding(a_bytes)
+        emb_b = await _extract_single_embedding(b_bytes)
+        if emb_a is None or emb_b is None:
+            raise HTTPException(
+                status_code=400, detail="Não foi possível extrair rosto em A ou B."
+            )
+
+        dist = _distance(emb_a, emb_b)
+        return CompareResponse(
+            ok=True, distance=dist, threshold=thr, is_same=(dist <= thr)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------------------------------------------------------
+# Startup
+# -----------------------------------------------------------------------------
+
+
+@app.on_event("startup")
+async def on_startup():
+    # pequeno atraso para cenários locais
+    await asyncio.sleep(1.5)
+    try:
+        mem_index.rebuild()
+        print("[INFO] Índice em memória carregado a partir do banco.")
+    except Exception as e:
+        print(f"[WARN] Falha ao reconstruir índice inicial: {e}")

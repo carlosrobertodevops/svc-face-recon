@@ -19,7 +19,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} -h 127.0.0.1 || exit 1",
         ]
       interval: 10s
       timeout: 5s
@@ -36,7 +36,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # Tudo embutido aqui (sem arquivo .sql externo)
     command: >
       sh -c "
       export PGPASSWORD='${POSTGRES_PASSWORD:-Pwdsvcfacerecon}' &&
@@ -48,6 +47,23 @@ services:
           );\"
       "
     restart: "no"
+    networks: [monitoring]
+
+  # -------------------- REDIS (cache) --------------------
+  redis:
+    image: redis:7-alpine
+    container_name: svc-face-recon-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./_data/redis:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
     networks: [monitoring]
 
   # -------------------- APP --------------------
@@ -64,11 +80,15 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
+      # Redis interno
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       db:
         condition: service_healthy
       db-init:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped

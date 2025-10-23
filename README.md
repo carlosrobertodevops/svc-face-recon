@@ -18,25 +18,38 @@ Função: detectar rostos, gerar embeddings, comparar faces e integrar com Supab
 svc-face-recon/
 ├─ app/
 │  ├─ __init__.py
-│  ├─ main.py                   # FastAPI (endpoints)
-│  ├─ config.py                 # Variáveis de ambiente
-│  ├─ face_engine.py            # InsightFace + ONNX Runtime
-│  ├─ supabase_client.py        # Integração Supabase
-│  ├─ repository.py             # Persistência com pgvector
-│  ├─ indexer.py                # Indexação, cache em memória
-│  ├─ schemas.py                # Modelos Pydantic
-│  ├─ utils.py                  # Download/conversão imagens
-│  ├─ __tests__/                # (opcional) testes unitários
-│  │  ├─ test_api.py
-│  │  └─ test_embeddings.py
-├─ requirements.txt
+│  ├─ config.py
+│  ├─ docs.py                 # Swagger UI custom (/docs), /openapi.json e /openapi.yaml
+│  ├─ face_engine.py
+│  ├─ indexer.py
+│  ├─ main.py                 # Endpoints: /live /health /ready /ops/status /index /enroll /identify /verify /compare
+│  ├─ repository.py
+│  ├─ schemas.py
+│  ├─ supabase_client.py
+│  ├─ utils.py
+│  └─ __tests__/
+│     ├─ test_api.py
+│     └─ test_embeddings.py
+│
+├─ observability/
+│  ├─ prometheus/
+│  │  └─ prometheus.yml       # Scrape: svc-face-recon:8000/metrics, cadvisor:8080, node-exporter:9100
+│  └─ grafana/
+│     └─ provisioning/
+│        ├─ datasources/
+│        │  └─ datasource.yml # Datasource Prometheus
+│        └─ dashboards/
+│           ├─ dashboards.yml
+│           └─ fastapi-overview.json
+│
 ├─ Dockerfile
-├─ docker-compose.local.yaml
-├─ docker-compose.coolify.yaml
+├─ docker-compose.local.yaml   # svc + Prometheus + Grafana + cAdvisor + node-exporter + Datadog (opcional)
+├─ docker-compose.coolify.yaml # svc para produção na Coolify (secrets pela UI)
+├─ requirements.txt            # FastAPI, InsightFace/ONNX, Supabase, psycopg, Prometheus instrumentator, ddtrace
 ├─ .env.example
-├─ .env.local
-├─ .env.coolify
-└─ README.md
+├─ .env.local                  # (dev) SUPABASE_STORAGE_BUCKET=uploads
+└─ .env.coolify                # (prod – opcional; preferir secrets na Coolify)
+
 ```
 
 ---

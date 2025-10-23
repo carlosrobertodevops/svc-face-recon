@@ -73,6 +73,7 @@ services:
       - .env.coolify
     environment:
       # Banco interno do stack (pgvector) em produção
+      # (corrigido: removido '}' sobrando no final)
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no_env_coolify}@db:5432/${POSTGRES_DB:-svc_face_recon}}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}

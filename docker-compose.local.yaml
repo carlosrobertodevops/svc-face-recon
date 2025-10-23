@@ -19,7 +19,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} -h 127.0.0.1 || exit 1",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}",
         ]
       interval: 10s
       timeout: 5s
@@ -54,15 +54,15 @@ services:
     image: redis:7-alpine
     container_name: svc-face-recon-redis
     command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - ./_data/redis:/data
     ports:
       - "6379:6379"
+    volumes:
+      - ./_data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
-      retries: 10
+      retries: 20
     restart: unless-stopped
     networks: [monitoring]
 
@@ -70,17 +70,19 @@ services:
   svc-face-recon:
     build:
       context: .
+      dockerfile: Dockerfile
+      network: host
+    platform: linux/amd64
     container_name: svc-face-recon
     ports:
       - "8000:8000"
     env_file:
       - .env.local
     environment:
-      # Banco local (para embeddings) – SEM ssl em dev
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
+      # >>> Forçado para o serviço 'db' do compose (ignora qualquer DATABASE_URL do .env.local)
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable"
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
-      # Redis interno
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       db:

@@ -1,5 +1,12 @@
 # app/face_engine.py
 from __future__ import annotations
+import os
+
+# --- Força cache do InsightFace no volume /models e desativa CUDA no ORT ---
+os.environ.setdefault("INSIGHTFACE_HOME", "/models")
+os.environ.setdefault("HF_HOME", "/models")
+os.environ.setdefault("ORT_DISABLE_CUDA", "1")  # evita warnings de CUDA ausente
+
 import numpy as np
 from PIL import Image
 import insightface
@@ -9,15 +16,14 @@ from insightface.app import FaceAnalysis
 class FaceEngine:
     """
     Wrapper do InsightFace para detecção + embeddings.
-    Usa o modelo 'buffalo_l' (512-dim).
+    Usa o modelo 'buffalo_l' (512-dim) e CPU por padrão.
     """
 
     def __init__(self, det_size=(640, 640), cpu_only: bool = True):
         self.app = FaceAnalysis(
             name="buffalo_l", allowed_modules=["detection", "recognition"]
         )
-        # ctx_id = -1 → CPU; 0 → GPU:0
-        ctx_id = -1 if cpu_only else 0
+        ctx_id = -1 if cpu_only else 0  # -1 = CPU
         self.app.prepare(ctx_id=ctx_id, det_size=det_size)
 
     def extract_embeddings(self, image: Image.Image, max_faces: int = 5):
@@ -44,10 +50,8 @@ class FaceEngine:
 
     @staticmethod
     def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
-        # embeddings do buffalo_l já vêm normalizados (norm=1)
-        # distância de cosseno = 1 - (a dot b)
+        # embeddings buffalo_l são normalizados; distância de cosseno = 1 - dot
         return float(1.0 - float(np.dot(a, b)))
 
 
-# Instância única (carrega modelo uma vez)
 face_engine = FaceEngine()

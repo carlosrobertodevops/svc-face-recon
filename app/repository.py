@@ -1,9 +1,8 @@
 # app/repository.py
 from __future__ import annotations
-from typing import Iterable, Optional, Tuple, List
+from typing import Optional
 import numpy as np
 import psycopg
-
 from .config import settings
 
 
@@ -14,7 +13,6 @@ def get_conn():
 def upsert_member_embedding(member_id: str, embedding: np.ndarray) -> None:
     """
     Salva/atualiza o embedding (vector(512)) em member_faces.
-    Requer extensão pgvector ativa.
     """
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(

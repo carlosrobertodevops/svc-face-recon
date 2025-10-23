@@ -1,38 +1,115 @@
-version: "3.9"
+name: "svc-face-recon"
 
 services:
   svc-face-recon:
     build:
       context: .
       dockerfile: Dockerfile
-    image: svc-face-recon:coolify
+    # Evita tentar "pull": força build local quando precisar
+    pull_policy: build
     container_name: svc-face-recon
-    # Em produção, prefira definir as variáveis na UI da Coolify (Secrets/Env)
-    # Deixe esta linha comentada ou use um .env.coolify local apenas para testes:
-    # env_file:
-    #   - .env.coolify
+    env_file:
+      - .env.local
     environment:
-      SERVICE_NAME: "svc-face-recon"
-      HOST: "0.0.0.0"
-      PORT: "8000"
-      # As variáveis abaixo devem ser definidas como SECRETS na Coolify:
-      # SUPABASE_URL: "<set-in-coolify>"
-      # SUPABASE_SERVICE_ROLE_KEY: "<set-in-coolify>"
-      # SUPABASE_STORAGE_BUCKET: "profiles"
-      # DATABASE_URL: "<set-in-coolify>"
-      # FACE_RECOGNITION_THRESHOLD: "0.35"
-      # MAX_FACES_PER_IMAGE: "5"
+      - DD_TRACE_ENABLED=false
+      - DD_ENV=local
+      - DD_SERVICE=svc-face-recon
+      - DD_VERSION=v1
+    ports:
+      - "8000:8000"
     volumes:
       - models-cache:/models
-    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 20s
-    # Coolify injeta sua própria rede e proxy; não exponha 'ports'.
-    # O domínio/rota é configurado na interface da Coolify apontando para a porta 8000 do serviço.
+    depends_on:
+      - prometheus
+      - grafana
+      - cadvisor
+      - node-exporter
+    restart: unless-stopped
+    profiles: ["app", "obs"] # sobe com --profile app (ou obs)
+
+  # ---- Prometheus ----
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    profiles: ["obs"]
+
+  # ---- Grafana ----
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles: ["obs"]
+
+  # ---- cAdvisor ----
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: cadvisor
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    profiles: ["obs"]
+
+  # ---- node-exporter ----
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    pid: host
+    network_mode: bridge
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+    profiles: ["obs"]
+
+  # ---- Datadog (opcional) ----
+  datadog:
+    image: gcr.io/datadoghq/agent:7
+    container_name: datadog-agent
+    environment:
+      - DD_API_KEY=${DD_API_KEY} # defina no shell ou .env.local se for usar
+      - DD_SITE=datadoghq.com
+      - DD_ENV=local
+      - DD_APM_ENABLED=true
+      - DD_LOGS_ENABLED=true
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+    ports:
+      - "8126:8126"
+      - "4318:4318"
+    restart: unless-stopped
+    profiles: ["dd"] # só sobe se você pedir --profile dd
 
 volumes:
   models-cache:

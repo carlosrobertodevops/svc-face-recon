@@ -2,23 +2,16 @@
 from __future__ import annotations
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.openapi.utils import get_openapi
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from .config import settings
 
-# Se quiser YAML:
-/* try: */
 try:
-    import yaml  # pip install pyyaml (opcional)
-except Exception:  # pragma: no cover
+    import yaml  # opcional (pyyaml)
+except Exception:
     yaml = None
 
 
 def swagger_ui_html(app: FastAPI) -> HTMLResponse:
-    """
-    Página Swagger customizada com cabeçalho (Env/Platform/Host/etc) e links rápidos,
-    mantendo o bundle padrão via CDN.
-    """
-    # você pode dinamizar essas infos conforme seu ambiente
     ENV = "production"
     PLATFORM = "container"
     TIMEOUT = 15
@@ -32,10 +25,7 @@ def swagger_ui_html(app: FastAPI) -> HTMLResponse:
     <title>{settings.SERVICE_NAME} — API Docs</title>
     <link rel="icon" href="https://fastapi.tiangolo.com/img/favicon.png">
     <style>
-      body {{
-        margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-        background: #fff;
-      }}
+      body {{ margin: 0; font-family: ui-sans-serif, system-ui; background: #fff; }}
       .topbar {{ padding: 12px 16px; background: #f8fafc; border-bottom: 1px solid #e5e7eb; }}
       .badges span {{
         display:inline-block; margin-right:8px; padding:4px 8px; border-radius:8px; background:#eef2ff; color:#3730a3; font-size:12px;
@@ -113,7 +103,11 @@ def mount_docs_routes(app: FastAPI) -> None:
             tags=app.openapi_tags,
         )
         if yaml is None:
-            # se PyYAML não estiver instalado, devolve JSON como texto
             import json
-            return PlainTextResponse(json.dumps(schema, indent=2), media_type="application/yaml")
-        return PlainTextResponse(yaml.safe_dump(schema, sort_keys=False), media_type="application/yaml")
+
+            return PlainTextResponse(
+                json.dumps(schema, indent=2), media_type="application/yaml"
+            )
+        return PlainTextResponse(
+            yaml.safe_dump(schema, sort_keys=False), media_type="application/yaml"
+        )

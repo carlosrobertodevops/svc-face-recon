@@ -1,32 +1,109 @@
-name: svc-face-recon
+name: "svc-face-recon"
+
 services:
+  # ---- Grafana ----
   svc-face-recon:
     build:
       context: .
       dockerfile: Dockerfile
     image: svc-face-recon:local
-    container_name: svc-face-recon-local
+    container_name: svc-face-recon
     env_file:
       - .env.local
+    environment:
+      - DD_TRACE_ENABLED=false
+      - DD_ENV=local
+      - DD_SERVICE=svc-face-recon
+      - DD_VERSION=v1
     ports:
       - "8000:8000"
     volumes:
-      - models-cache:/models # cache de modelos InsightFace/ONNX
-    restart: unless-stopped
+      - models-cache:/models
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 20s
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: "2g"
-        reservations:
-          cpus: "0.5"
-          memory: "512m"
+    depends_on:
+      - prometheus
+      - grafana
+      - cadvisor
+      - node-exporter
+    restart: unless-stopped
+
+  # ---- Prometheus ----
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  # ---- Grafana ----
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ---- cAdvisor ----
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.2
+    container_name: cadvisor
+    privileged: true
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # ---- node-exporter ----
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    pid: host
+    network_mode: bridge
+    ports:
+      - "9100:9100"
+    restart: unless-stopped
+
+  # ---- Datadog (opcional local) ----
+  datadog:
+    image: gcr.io/datadoghq/agent:7
+    container_name: datadog-agent
+    environment:
+      - DD_API_KEY=${DD_API_KEY:-457374e8871c087d4948320e1e00bed}
+      - DD_SITE=datadoghq.com
+      - DD_ENV=local
+      - DD_APM_ENABLED=true
+      - DD_LOGS_ENABLED=true
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+    ports:
+      - "8126:8126"
+      - "4318:4318"
+    restart: unless-stopped
 
 volumes:
   models-cache:

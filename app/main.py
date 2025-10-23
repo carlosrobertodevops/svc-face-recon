@@ -1,11 +1,26 @@
 # app/main.py
 from __future__ import annotations
+import os
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image
+from prometheus_fastapi_instrumentator import Instrumentator
+
+# Datadog APM (opcional)
+if os.getenv("DD_TRACE_ENABLED", "false").lower() in ("1", "true", "yes"):
+    from ddtrace import patch, tracer
+
+    patch(fastapi=True, httpx=True, psycopg=True)
+    tracer.set_tags(
+        {
+            "service.name": os.getenv("DD_SERVICE", "svc-face-recon"),
+            "env": os.getenv("DD_ENV", "local"),
+            "version": os.getenv("DD_VERSION", "v1"),
+        }
+    )
 
 from .config import settings
 from .schemas import IdentifyRequest, IdentifyResponse, VerifyRequest, IndexResponse
@@ -24,10 +39,7 @@ def crop_from_bbox(img: Image.Image, bbox):
 
 
 TAGS_METADATA = [
-    {
-        "name": "ops",
-        "description": "Operações de saúde/diagnóstico do serviço.",
-    },
+    {"name": "ops", "description": "Operações de saúde/diagnóstico do serviço."},
     {
         "name": "face",
         "description": "Reconhecimento facial: indexação, identificação, verificação e comparação.",
@@ -38,15 +50,15 @@ app = FastAPI(
     title=f"{settings.SERVICE_NAME}",
     version="v1.0.0",
     description="Microserviço de **reconhecimento facial** e processamento de imagem integrado ao Supabase (Storage + pgvector).",
-    openapi_url="/openapi.json",  # usaremos nosso /docs custom
+    openapi_url="/openapi.json",
     docs_url=None,
 )
 app.openapi_tags = TAGS_METADATA
 
-# CORS
+# CORS (restrinja em produção)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # restrinja em produção
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -65,10 +77,7 @@ async def live():
 
 
 @app.get(
-    "/health",
-    tags=["ops"],
-    summary="Health",
-    description="Checagem de saúde da aplicação (básica).",
+    "/health", tags=["ops"], summary="Health", description="Checagem simples de saúde."
 )
 async def health():
     return {"status": "ok", "service": settings.SERVICE_NAME}
@@ -78,7 +87,6 @@ async def health():
     "/ready", tags=["ops"], summary="Ready", description="Pronto para receber tráfego?"
 )
 async def ready():
-    # poderia validar conexão ao DB/Model/Storage
     return {"ready": True}
 
 
@@ -89,7 +97,6 @@ async def ready():
     description="Informações operacionais resumidas.",
 )
 async def ops_status():
-    # estenda conforme necessidade
     return {
         "service": settings.SERVICE_NAME,
         "threshold": settings.FACE_RECOGNITION_THRESHOLD,
@@ -103,7 +110,7 @@ async def ops_status():
     response_model=IndexResponse,
     tags=["face"],
     summary="Reindexar membros a partir do Storage",
-    description="Lê `members(id, photo_path)`, extrai embeddings e atualiza `member_faces` (pgvector). Reconstrói cache em memória.",
+    description="Lê `members(id, photo_path)` e salva embeddings em `member_faces` (pgvector). Reconstrói cache.",
 )
 async def index_all():
     result = build_index_from_members()
@@ -117,15 +124,11 @@ async def index_all():
     description="Gera embedding de uma imagem (file, image_url ou supabase_path) e salva em `member_faces`.",
 )
 async def enroll(
-    member_id: str = Form(
-        ..., description="ID do membro (uuid ou int conforme seu schema)"
-    ),
+    member_id: str = Form(..., description="ID do membro (uuid/int)"),
     file: UploadFile | None = File(None, description="Arquivo de imagem (JPEG/PNG)"),
-    image_url: Optional[str] = Form(
-        None, description="URL pública (ou assinada) da imagem"
-    ),
+    image_url: Optional[str] = Form(None, description="URL pública/assinada"),
     supabase_path: Optional[str] = Form(
-        None, description="Caminho no Supabase Storage (ex: `profiles/123.jpg`)"
+        None, description="Caminho no Storage (ex: membros/123.jpg)"
     ),
 ):
     file_bytes = await file.read() if file else None
@@ -145,12 +148,12 @@ async def enroll(
     response_model=IdentifyResponse,
     tags=["face"],
     summary="Identificar a pessoa mais provável",
-    description="Recebe uma imagem e retorna o `member_id` mais próximo (pgvector/cache), a distância (cosine) e `matched` baseado no threshold.",
+    description="Retorna `member_id` mais próximo, distância (cosine) e `matched` baseado no threshold.",
 )
 async def identify(
     req: IdentifyRequest = Body(
-        example={"supabase_path": "profiles/123.jpg"},
-        description="Fonte da imagem por `supabase_path` ou `image_url`. Alternativamente envie como `file` multipart.",
+        example={"supabase_path": "membros/123.jpg"},
+        description="Fonte da imagem: `supabase_path` ou `image_url`. Alternativamente, envie como `file` multipart.",
     ),
     file: UploadFile | None = File(
         None,
@@ -191,14 +194,14 @@ async def identify(
     "/verify",
     response_model=IdentifyResponse,
     tags=["face"],
-    summary="Verificar se a imagem corresponde a um member_id específico",
+    summary="Verificar se a imagem corresponde a um member_id",
     description="Compara a imagem recebida com o `member_id` informado.",
 )
 async def verify(
     req: VerifyRequest = Body(
         example={
             "member_id": "00000000-0000-0000-0000-000000000000",
-            "supabase_path": "profiles/123.jpg",
+            "supabase_path": "membros/123.jpg",
         },
         description="Informe `member_id` e a fonte da imagem.",
     ),
@@ -245,18 +248,10 @@ async def verify(
 async def compare(
     file_a: UploadFile | None = File(None, description="Imagem A"),
     file_b: UploadFile | None = File(None, description="Imagem B"),
-    image_url_a: Optional[str] = Form(
-        None, description="URL ou URL assinada da imagem A"
-    ),
-    image_url_b: Optional[str] = Form(
-        None, description="URL ou URL assinada da imagem B"
-    ),
-    supabase_path_a: Optional[str] = Form(
-        None, description="Path no Storage para imagem A"
-    ),
-    supabase_path_b: Optional[str] = Form(
-        None, description="Path no Storage para imagem B"
-    ),
+    image_url_a: Optional[str] = Form(None, description="URL (A)"),
+    image_url_b: Optional[str] = Form(None, description="URL (B)"),
+    supabase_path_a: Optional[str] = Form(None, description="Storage path (A)"),
+    supabase_path_b: Optional[str] = Form(None, description="Storage path (B)"),
 ):
     try:
         bA = await resolve_image_source(
@@ -304,5 +299,8 @@ async def compare(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# ---- montar rotas de documentação custom ----
+# Docs custom
 mount_docs_routes(app)
+
+# /metrics (Prometheus)
+Instrumentator().instrument(app).expose(app, include_in_schema=False)

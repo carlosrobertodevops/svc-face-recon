@@ -1,6 +1,4 @@
-# docker-compose.yaml — Coolify (produção)
-# Evita ${...} dentro de strings complexas (como URLs).
-# Defina DATABASE_URL completa nas variáveis de ambiente do Coolify.
+name: svc-face-recon-local
 
 services:
   # -------------------- DATABASE (pgvector) --------------------
@@ -8,18 +6,44 @@ services:
     image: pgvector/pgvector:pg16
     container_name: svc-face-recon-db
     env_file:
-      - .env
+      - .env.local
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
-    entrypoint: ["/bin/bash", "-c"]
+    healthcheck:
+      # usar host explícito evita resolução DNS dentro do HC
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 60s
+    restart: unless-stopped
+    networks: [monitoring]
+
+  # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
+  db-init:
+    image: postgres:16-alpine
+    container_name: svc-face-recon-db-init
+    env_file:
+      - .env.local
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
     command: |
       set -e
-      mkdir -p /docker-entrypoint-initdb.d
-      cat > /docker-entrypoint-initdb.d/01_init.sql <<'SQL'
+      echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
+      export PGPASSWORD="${POSTGRES_PASSWORD:-Pwdsvcfacerecon}"
+      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
       CREATE TABLE IF NOT EXISTS member_faces (
@@ -31,18 +55,8 @@ services:
       ON member_faces USING hnsw (embedding vector_l2_ops)
       WITH (m = 16, ef_construction = 200);
       SQL
-      exec docker-entrypoint.sh postgres
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 || exit 1",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 40
-      start_period: 90s
-    restart: unless-stopped
+      echo ">> DDL aplicada com sucesso."
+    restart: "no"
     networks: [monitoring]
 
   # -------------------- REDIS (cache) --------------------
@@ -50,6 +64,8 @@ services:
     image: redis:7-alpine
     container_name: svc-face-recon-redis
     command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
     volumes:
       - ./_data/redis:/data
     healthcheck:
@@ -66,33 +82,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    platform: linux/amd64
     container_name: svc-face-recon
+    ports:
+      - "8000:8000"
     env_file:
-      - .env
+      - .env.local
     environment:
-      # <- IMPORTANTÍSSIMO: defina DATABASE_URL completa no Coolify/.env
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable"
       HOST: ${HOST}
       PORT: ${PORT}
       REDIS_URL: ${REDIS_URL}
-      # SUPABASE_URL: ${SUPABASE_URL}
-      # SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
-      # SUPABASE_SERVICE_ROLE: ${SUPABASE_SERVICE_ROLE}
-      # SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET}
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    # Se quiser expor diretamente (sem proxy do Coolify), descomente:
-    # ports:
-    #   - "8000:8000"
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped
     networks: [monitoring]
 
-  # -------------------- OBSERVABILITY --------------------
+  # -------------------- OBSERVABILITY (profile: obs) --------------------
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: prometheus
@@ -101,9 +114,11 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
     volumes:
-      - ./observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./observabilidade/prometheus/data:/prometheus
-    # ports: ["9090:9090"]  # opcional em produção
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/data:/prometheus
+    ports:
+      - "9090:9090"
+    profiles: ["obs"]
     restart: unless-stopped
     networks: [monitoring]
 
@@ -111,30 +126,38 @@ services:
     image: grafana/grafana:11.2.0
     container_name: grafana
     env_file:
-      - .env
+      - .env.local
     volumes:
-      - ./observabilidade/grafana/data:/var/lib/grafana
-      - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
+      - ./observability/grafana/data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"
     depends_on:
       - prometheus
-    # ports: ["3000:3000"]  # opcional em produção
+    profiles: ["obs"]
     restart: unless-stopped
     networks: [monitoring]
 
   node-exporter:
     image: prom/node-exporter:v1.8.1
     container_name: node-exporter
+    ports:
+      - "9100:9100"
+    profiles: ["obs"]
     restart: unless-stopped
     networks: [monitoring]
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
+    ports:
+      - "8085:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+    profiles: ["obs"]
     restart: unless-stopped
     networks: [monitoring]
 
@@ -142,19 +165,23 @@ services:
     image: datadog/agent:7.52.0
     container_name: datadog
     env_file:
-      - .env
+      - .env.local
     environment:
       DD_SITE: ${DD_SITE}
+      DD_API_KEY: ${DD_API_KEY}
       DD_LOGS_ENABLED: ${DD_LOGS_ENABLED}
       DD_APM_ENABLED: ${DD_APM_ENABLED}
       DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC}
       DD_CONTAINER_COLLECT_ALL: ${DD_CONTAINER_COLLECT_ALL}
       DD_PROCESS_AGENT_ENABLED: ${DD_PROCESS_AGENT_ENABLED}
-      DD_API_KEY: ${DD_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+    ports:
+      - "8126:8126"
+      - "8125:8125/udp"
+    profiles: ["obs"]
     restart: unless-stopped
     networks: [monitoring]
 

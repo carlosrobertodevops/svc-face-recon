@@ -161,6 +161,7 @@ services:
       - .env.coolify
     environment:
       DD_SITE: ${DD_SITE:-datadoghq.com}
+      DD_API_KEY: ${DD_API_KEY}
       DD_LOGS_ENABLED: ${DD_LOGS_ENABLED:-true}
       DD_APM_ENABLED: ${DD_APM_ENABLED:-true}
       DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC:-true}

@@ -1,11 +1,8 @@
 # syntax=docker/dockerfile:1.6
-# Dockerfile.prod — estável (Coolify + Local)
+# Dockerfile.prod — amd64 (Coolify + local)
 
 FROM python:3.11
 
-# ======================
-# Variáveis globais seguras
-# ======================
 ENV SERVICE_NAME=svc-face-recon \
     ENVIRONMENT=production \
     HOME=/app \
@@ -20,64 +17,40 @@ ENV SERVICE_NAME=svc-face-recon \
     MKL_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=180 \
-    PIP_ONLY_BINARY=:all: \
-    PIP_PREFER_BINARY=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
-# ======================
-# Copia apenas os requisitos primeiro (cache eficiente)
-# ======================
+# 1) cache do pip e instalação só por wheels (amd64 tem wheels pra tudo que você usa)
 COPY requirements.txt .
-
-# ======================
-# Instala dependências via wheels (sem apt-get)
-# ======================
 RUN python -m pip install --upgrade pip setuptools wheel packaging && \
-    pip install --prefer-binary --no-cache-dir -r requirements.txt \
-    --extra-index-url https://pypi.org/simple \
-    --extra-index-url https://www.piwheels.org/simple
+    pip install --prefer-binary --only-binary=:all: --no-cache-dir -r requirements.txt
 
-# ======================
-# Cria diretórios de cache e baixa modelos (sem shell mkdir)
-# ======================
+# 2) cria caches e tenta baixar modelos (se falhar, não quebra o build)
 RUN python - <<'PY'
 import os
 env = {
-    "HOME": "/app",
-    "XDG_CACHE_HOME": "/app/.cache",
-    "INSIGHTFACE_HOME": "/app/.insightface",
-    "HF_HOME": "/app/.models",
-    "ORT_DISABLE_CUDA": "1",
+  "XDG_CACHE_HOME": "/app/.cache",
+  "INSIGHTFACE_HOME": "/app/.insightface",
+  "HF_HOME": "/app/.models",
+  "ORT_DISABLE_CUDA": "1",
 }
 os.environ.update(env)
-for d in (env["XDG_CACHE_HOME"], env["INSIGHTFACE_HOME"], env["HF_HOME"]):
-    try:
+for d in env.values():
+    if d.startswith("/app/"):
         os.makedirs(d, exist_ok=True)
-        print("✔ Created", d)
-    except Exception as e:
-        print("[WARN]", d, e)
-
 try:
     from insightface.app import FaceAnalysis
     app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
     app.prepare(ctx_id=-1, det_size=(640,640))
-    print("✔ Modelos baixados em:", env["INSIGHTFACE_HOME"])
+    print("Modelos baixados em:", env["INSIGHTFACE_HOME"])
 except Exception as e:
     print("[WARN] Pré-download opcional falhou:", e)
 PY
 
-# ======================
-# Copia código
-# ======================
+# 3) código
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-
-# ======================
-# Execução
-# ======================
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

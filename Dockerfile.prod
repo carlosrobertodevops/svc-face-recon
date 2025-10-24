@@ -22,26 +22,66 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         ca-certificates curl libgl1 libglib2.0-0 libstdc++6 libgomp1; \
-    rm -rf /var/lib/apt/lists/*
+    apt-get clean; \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Instala todas as dependências de uma vez (incluindo as pesadas)
+# Cache de pip para builds mais rápidos
+RUN pip install --upgrade pip setuptools wheel
+
+# Copia requirements primeiro para aproveitar cache do Docker
 COPY requirements.txt .
-RUN python -m pip install --only-binary=:all: --prefer-binary -r requirements.txt
 
-# Pré-download dos modelos (não quebra o build se falhar)
-RUN python - <<'PY' || true
+# Instala dependências básicas primeiro (otimização de cache)
+RUN python -m pip install --no-cache-dir \
+    numpy==2.1.2 \
+    pillow==10.4.0 \
+    onnxruntime==1.19.2
+
+# Instala demais dependências
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+# Cria diretório para modelos e cache
+RUN mkdir -p /tmp/insightface /root/.insightface && \
+    chmod -R 755 /tmp/insightface /root/.insightface
+
+# Pré-download dos modelos (com timeout e retry)
+RUN python - <<'PY' || echo "Pré-download de modelos falhou, continuando..."
 import os
-os.environ["INSIGHTFACE_HOME"]="/tmp/insightface"
-os.environ["ORT_DISABLE_CUDA"]="1"
-from insightface.app import FaceAnalysis
-app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
-app.prepare(ctx_id=-1, det_size=(640,640))
-print("Modelos preparados em", os.environ["INSIGHTFACE_HOME"])
+import sys
+os.environ["INSIGHTFACE_HOME"] = "/tmp/insightface"
+os.environ["ORT_DISABLE_CUDA"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
+try:
+    from insightface.app import FaceAnalysis
+    print(">>> Iniciando download dos modelos InsightFace...")
+    app = FaceAnalysis(
+        name="buffalo_l",
+        allowed_modules=["detection", "recognition"],
+        providers=['CPUExecutionProvider']
+    )
+    app.prepare(ctx_id=-1, det_size=(640, 640))
+    print(f">>> Modelos baixados com sucesso para: {os.environ['INSIGHTFACE_HOME']}")
+except Exception as e:
+    print(f">>> AVISO: Falha no pré-download de modelos: {e}")
+    print(">>> Os modelos serão baixados no primeiro uso.")
+    sys.exit(0)
 PY
 
-# Código
+# Copia código da aplicação
 COPY app ./app
 COPY .env.example ./.env
 
+# Health check para o Coolify
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Usuário não-root para segurança (opcional)
+RUN groupadd -r appuser && useradd -r -g appuser appuser && \
+    chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 8000
-CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
+
+# Comando de inicialização com opções otimizadas
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--access-log"]

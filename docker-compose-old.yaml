@@ -1,6 +1,5 @@
 # docker-compose.yaml — usado pelo Coolify (mesmo conteúdo do docker-compose.coolify.yaml)
 # name: svc-face-recon-coolify
-
 services:
   db:
     image: pgvector/pgvector:pg16

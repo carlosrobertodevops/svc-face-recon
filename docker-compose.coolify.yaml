@@ -1,4 +1,13 @@
-name: svc-face-recon-coolify
+# =============================================================================
+# Arquivo: docker-compose.yaml
+# Versão: v1.0.0
+# Objetivo: Orquestração (Coolify) — INALTERADO
+# Funções/métodos:
+# - Serviço svc-face-recon-db
+# =============================================================================
+
+# docker-compose.yaml — Coolify (produção)
+# Stack: Postgres (pgvector), Redis, svc-face-recon e observabilidade
 
 services:
   # -------------------- DATABASE (pgvector) --------------------
@@ -8,39 +17,17 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no.env}
-      POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} || exit 1",
-        ]
-      interval: 5s
-      timeout: 5s
-      retries: 40
-      start_period: 60s
-    restart: unless-stopped
-    networks: [monitoring]
-
-  # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
-  db-init:
-    image: postgres:16-alpine
-    container_name: svc-face-recon-db-init
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
+    # Inicialização idempotente via script SQL (executa apenas no 1º boot do volume)
+    entrypoint: ["/bin/bash", "-c"]
     command: |
       set -e
-      echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
-      export PGPASSWORD="${POSTGRES_PASSWORD:?defina_no.env}"
-      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-svc_face_recon}" <<'SQL'
+      mkdir -p /docker-entrypoint-initdb.d
+      cat > /docker-entrypoint-initdb.d/01_init.sql <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
       CREATE TABLE IF NOT EXISTS member_faces (
@@ -48,12 +35,24 @@ services:
         embedding vector(512) NOT NULL
       );
 
+      -- Índice HNSW recomendado para busca vetorial
       CREATE INDEX IF NOT EXISTS member_faces_hnsw
       ON member_faces USING hnsw (embedding vector_l2_ops)
       WITH (m = 16, ef_construction = 200);
       SQL
-      echo ">> DDL aplicada com sucesso."
-    restart: "no"
+
+      exec docker-entrypoint.sh postgres
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+    restart: unless-stopped
     networks: [monitoring]
 
   # -------------------- REDIS (cache) --------------------
@@ -81,25 +80,30 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no.env}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
-      HOST: ${HOST:-0.0.0.0}
-      PORT: ${PORT:-8000}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Compose simples (sem :- nem :?), o Coolify injeta as VARs
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
+      HOST: ${HOST}
+      PORT: ${PORT}
+      REDIS_URL: ${REDIS_URL}
+      # Outras variáveis do seu app (Supabase, etc.) devem estar no .env/Coolify
+      # SUPABASE_URL: ${SUPABASE_URL}
+      # SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      # SUPABASE_SERVICE_ROLE: ${SUPABASE_SERVICE_ROLE}
+      # SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET}
     depends_on:
       db:
         condition: service_healthy
-      db-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    ports:
-      - "8000:8000"
+    # Em produção, normalmente o Coolify faz o proxy. Se quiser expor direto:
+    # ports:
+    #   - "8000:8000"
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped
     networks: [monitoring]
 
-  # -------------------- OBSERVABILITY (opcional) --------------------
+  # -------------------- OBSERVABILITY --------------------
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: prometheus
@@ -110,6 +114,9 @@ services:
     volumes:
       - ./observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observabilidade/prometheus/data:/prometheus
+    # Em produção, geralmente sem portas públicas; descomente se precisar:
+    # ports:
+    #   - "9090:9090"
     restart: unless-stopped
     networks: [monitoring]
 
@@ -123,18 +130,27 @@ services:
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
+    # Em produção, geralmente sem portas públicas; descomente se precisar:
+    # ports:
+    #   - "3000:3000"
     restart: unless-stopped
     networks: [monitoring]
 
   node-exporter:
     image: prom/node-exporter:v1.8.1
     container_name: node-exporter
+    # Em produção, normalmente não expõe porta
+    # ports:
+    #   - "9100:9100"
     restart: unless-stopped
     networks: [monitoring]
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
+    # Em produção, normalmente não expõe porta
+    # ports:
+    #   - "8085:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -149,16 +165,21 @@ services:
     env_file:
       - .env
     environment:
-      DD_SITE: ${DD_SITE:-datadoghq.com}
-      DD_LOGS_ENABLED: ${DD_LOGS_ENABLED:-true}
-      DD_APM_ENABLED: ${DD_APM_ENABLED:-true}
-      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC:-true}
-      DD_CONTAINER_COLLECT_ALL: ${DD_CONTAINER_COLLECT_ALL:-true}
-      DD_PROCESS_AGENT_ENABLED: ${DD_PROCESS_AGENT_ENABLED:-true}
+      DD_SITE: ${DD_SITE}
+      DD_LOGS_ENABLED: ${DD_LOGS_ENABLED}
+      DD_APM_ENABLED: ${DD_APM_ENABLED}
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC}
+      DD_CONTAINER_COLLECT_ALL: ${DD_CONTAINER_COLLECT_ALL}
+      DD_PROCESS_AGENT_ENABLED: ${DD_PROCESS_AGENT_ENABLED}
+      DD_API_KEY: ${DD_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+    # Em produção, geralmente sem portas expostas
+    # ports:
+    #   - "8126:8126"
+    #   - "8125:8125/udp"
     restart: unless-stopped
     networks: [monitoring]
 

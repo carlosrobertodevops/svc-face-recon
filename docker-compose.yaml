@@ -5,9 +5,9 @@
 # Funções/métodos:
 # - Serviço svc-face-recon-db
 # =============================================================================
-
 # docker-compose.yaml — Coolify (produção)
-# Stack: Postgres (pgvector), Redis, svc-face-recon e observabilidade
+# Evita ${...} dentro de strings complexas (como URLs).
+# Defina DATABASE_URL completa nas variáveis de ambiente do Coolify.
 
 services:
   # -------------------- DATABASE (pgvector) --------------------
@@ -22,7 +22,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
-    # Inicialização idempotente via script SQL (executa apenas no 1º boot do volume)
     entrypoint: ["/bin/bash", "-c"]
     command: |
       set -e
@@ -35,12 +34,10 @@ services:
         embedding vector(512) NOT NULL
       );
 
-      -- Índice HNSW recomendado para busca vetorial
       CREATE INDEX IF NOT EXISTS member_faces_hnsw
       ON member_faces USING hnsw (embedding vector_l2_ops)
       WITH (m = 16, ef_construction = 200);
       SQL
-
       exec docker-entrypoint.sh postgres
     healthcheck:
       test:
@@ -80,12 +77,11 @@ services:
     env_file:
       - .env
     environment:
-      # Compose simples (sem :- nem :?), o Coolify injeta as VARs
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable
+      # <- IMPORTANTÍSSIMO: defina DATABASE_URL completa no Coolify/.env
+      DATABASE_URL: ${DATABASE_URL}
       HOST: ${HOST}
       PORT: ${PORT}
       REDIS_URL: ${REDIS_URL}
-      # Outras variáveis do seu app (Supabase, etc.) devem estar no .env/Coolify
       # SUPABASE_URL: ${SUPABASE_URL}
       # SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       # SUPABASE_SERVICE_ROLE: ${SUPABASE_SERVICE_ROLE}
@@ -95,7 +91,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # Em produção, normalmente o Coolify faz o proxy. Se quiser expor direto:
+    # Se quiser expor diretamente (sem proxy do Coolify), descomente:
     # ports:
     #   - "8000:8000"
     volumes:
@@ -114,9 +110,7 @@ services:
     volumes:
       - ./observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observabilidade/prometheus/data:/prometheus
-    # Em produção, geralmente sem portas públicas; descomente se precisar:
-    # ports:
-    #   - "9090:9090"
+    # ports: ["9090:9090"]  # opcional em produção
     restart: unless-stopped
     networks: [monitoring]
 
@@ -130,27 +124,19 @@ services:
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
-    # Em produção, geralmente sem portas públicas; descomente se precisar:
-    # ports:
-    #   - "3000:3000"
+    # ports: ["3000:3000"]  # opcional em produção
     restart: unless-stopped
     networks: [monitoring]
 
   node-exporter:
     image: prom/node-exporter:v1.8.1
     container_name: node-exporter
-    # Em produção, normalmente não expõe porta
-    # ports:
-    #   - "9100:9100"
     restart: unless-stopped
     networks: [monitoring]
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
-    # Em produção, normalmente não expõe porta
-    # ports:
-    #   - "8085:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -176,10 +162,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
-    # Em produção, geralmente sem portas expostas
-    # ports:
-    #   - "8126:8126"
-    #   - "8125:8125/udp"
     restart: unless-stopped
     networks: [monitoring]
 

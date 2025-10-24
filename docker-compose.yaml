@@ -5,6 +5,7 @@
 # Funções/métodos:
 # - Serviço svc-face-recon-db
 # =============================================================================
+
 # docker-compose.yaml — Coolify (produção)
 # Evita ${...} dentro de strings complexas (como URLs).
 # Defina DATABASE_URL completa nas variáveis de ambiente do Coolify.

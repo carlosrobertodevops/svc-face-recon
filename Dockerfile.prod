@@ -18,10 +18,10 @@ RUN mkdir -p /models
 # Copia requirements
 COPY requirements.txt .
 
-# Upgrade pip para versões mais recentes
+# Upgrade pip
 RUN pip install --upgrade pip
 
-# Tenta instalar cada pacote individualmente COM TIMEOUT
+# Instalação individual dos pacotes
 RUN cat requirements.txt | while read package; do \
     if [ -n "$package" ]; then \
         echo "=== INSTALANDO: $package ===" && \
@@ -30,11 +30,8 @@ RUN cat requirements.txt | while read package; do \
     fi; \
     done
 
-# **CRÍTICO: REMOVE o download de modelos durante o build**
-RUN echo "Modelos serão baixados durante o primeiro uso da aplicação"
-
 COPY app ./app
-COPY .env ./.env
+COPY .env.example ./.env
 
 EXPOSE 8000
 ENV UVICORN_WORKERS=1

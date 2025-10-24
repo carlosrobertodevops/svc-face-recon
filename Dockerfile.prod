@@ -38,9 +38,8 @@ RUN echo "=== DEBUG: Conteúdo do requirements.txt ===" && \
     cat requirements.txt && \
     echo "=== FIM DEBUG ==="
 
-# Instala dependências com retry e verbose
-RUN python -m pip install -v --no-cache-dir --timeout=180 \
-    --retries=3 -r requirements.txt
+# Instala dependências CORRETAMENTE (sem erros de digitação)
+RUN python -m pip install --no-cache-dir --timeout=180 -r requirements.txt
 
 # Cria diretório para modelos e cache
 RUN mkdir -p /tmp/insightface /root/.insightface && \

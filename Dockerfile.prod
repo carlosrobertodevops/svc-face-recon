@@ -1,13 +1,7 @@
 # syntax=docker/dockerfile:1.6
-# svc-face-recon/Dockerfile.prod — produção (Coolify)
+# svc-face-recon/Dockerfile.prod — Produção (Coolify) SEM --platform
 
-ARG BUILDPLATFORM
-ARG TARGETPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
-ARG TARGETVARIANT
-
-FROM --platform=${TARGETPLATFORM} python:3.11-slim
+FROM python:3.11-slim
 
 # Identidade e ambiente
 ENV SERVICE_NAME=svc-face-recon
@@ -18,7 +12,7 @@ ENV INSIGHTFACE_HOME=/models
 ENV HF_HOME=/models
 ENV ORT_DISABLE_CUDA=1
 
-# Ajustes de performance e logs
+# Performance/logs
 ENV DEBIAN_FRONTEND=noninteractive
 ENV OMP_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
@@ -31,7 +25,7 @@ ENV UVICORN_WORKERS=2
 
 WORKDIR /app
 
-# Dependências do sistema (cross-arch compatíveis)
+# Dependências nativas
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \
  && rm -rf /var/lib/apt/lists/*
@@ -40,11 +34,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN mkdir -p /models && \
     if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
 
-# Instala dependências Python
+# Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pré-download dos modelos InsightFace (CPU only)
+# Pré-download dos modelos (CPU)
 RUN python - <<'PY'
 import os
 os.environ["INSIGHTFACE_HOME"]="/models"
@@ -60,4 +54,4 @@ COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]Ajustes
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

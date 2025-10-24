@@ -1,83 +1,18 @@
 # syntax=docker/dockerfile:1.6
-# svc-face-recon/Dockerfile.prod — Coolify (robusto)
-
 FROM python:3.11-slim
-
-ENV SERVICE_NAME=svc-face-recon \
-    INSIGHTFACE_HOME=/tmp/insightface \
-    HF_HOME=/tmp/insightface \
-    ORT_DISABLE_CUDA=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=300 \
-    PIP_RETRIES=5
 
 WORKDIR /app
 
-# SO deps completas (com git e ferramentas de compilação)
-RUN set -eux; \
-    printf 'Acquire::Retries "5";\nAcquire::http::No-Cache "true";\nAcquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99ci; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        ca-certificates curl git build-essential \
-        libgl1 libglib2.0-0 libstdc++6 libgomp1 pkg-config \
-        cmake make g++; \
-    apt-get clean; \
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+# Instala dependências básicas
+RUN apt-get update && apt-get install -y \
+    git libgl1 libglib2.0-0
 
-# Upgrade pip e ferramentas
-RUN python -m pip install --upgrade pip setuptools wheel
-
-# Copia requirements primeiro
+# Copia e instala requirements
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# DEBUG: Mostra conteúdo do requirements
-RUN echo "=== DEBUG: Conteúdo do requirements.txt ===" && \
-    cat requirements.txt && \
-    echo "=== FIM DEBUG ==="
-
-# Instala dependências CORRETAMENTE (sem erros de digitação)
-RUN python -m pip install --no-cache-dir --timeout=180 -r requirements.txt
-
-# Cria diretório para modelos e cache
-RUN mkdir -p /tmp/insightface /root/.insightface && \
-    chmod -R 755 /tmp/insightface /root/.insightface
-
-# Pré-download dos modelos (com timeout e retry)
-RUN python - <<'PY' || echo "Pré-download de modelos falhou, continuando..."
-import os
-import sys
-os.environ["INSIGHTFACE_HOME"] = "/tmp/insightface"
-os.environ["ORT_DISABLE_CUDA"] = "1"
-os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-
-try:
-    from insightface.app import FaceAnalysis
-    print(">>> Iniciando download dos modelos InsightFace...")
-    app = FaceAnalysis(
-        name="buffalo_l",
-        allowed_modules=["detection", "recognition"],
-        providers=['CPUExecutionProvider']
-    )
-    app.prepare(ctx_id=-1, det_size=(640, 640))
-    print(f">>> Modelos baixados com sucesso para: {os.environ['INSIGHTFACE_HOME']}")
-except Exception as e:
-    print(f">>> AVISO: Falha no pré-download de modelos: {e}")
-    print(">>> Os modelos serão baixados no primeiro uso.")
-    sys.exit(0)
-PY
-
-# Copia código da aplicação
+# Copia app
 COPY app ./app
-COPY .env.example ./.env
-
-# Health check simplificado
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
 
 EXPOSE 8000
-
-# Comando de inicialização
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -6,10 +6,10 @@ services:
     image: pgvector/pgvector:pg16
     container_name: svc-face-recon-db
     env_file:
-      - .env.coolify
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no_env_coolify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no.env}
       POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
@@ -31,7 +31,7 @@ services:
     image: postgres:16-alpine
     container_name: svc-face-recon-db-init
     env_file:
-      - .env.coolify
+      - .env
     depends_on:
       db:
         condition: service_healthy
@@ -39,7 +39,7 @@ services:
     command: |
       set -e
       echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
-      export PGPASSWORD="${POSTGRES_PASSWORD:?defina_no_env_coolify}"
+      export PGPASSWORD="${POSTGRES_PASSWORD:?defina_no.env}"
       psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-svc_face_recon}" <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -79,9 +79,9 @@ services:
       dockerfile: Dockerfile
     container_name: svc-face-recon
     env_file:
-      - .env.coolify
+      - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no_env_coolify}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no.env}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -117,7 +117,7 @@ services:
     image: grafana/grafana:11.2.0
     container_name: grafana
     env_file:
-      - .env.coolify
+      - .env
     volumes:
       - ./observabilidade/grafana/data:/var/lib/grafana
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
@@ -147,7 +147,7 @@ services:
     image: datadog/agent:7.52.0
     container_name: datadog
     env_file:
-      - .env.coolify
+      - .env
     environment:
       DD_SITE: ${DD_SITE:-datadoghq.com}
       DD_LOGS_ENABLED: ${DD_LOGS_ENABLED:-true}

@@ -6,10 +6,10 @@ services:
     image: pgvector/pgvector:pg16
     container_name: svc-face-recon-db
     env_file:
-      - .env.coolify
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no_env_coolify}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no.env}
       POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
@@ -71,10 +71,10 @@ services:
       dockerfile: Dockerfile
     container_name: svc-face-recon
     env_file:
-      - .env.coolify
+      - .env
     environment:
       # força o host "db" do compose (ignora DATABASE_URL externo se vier vazio)
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no_env_coolify}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no.env}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}

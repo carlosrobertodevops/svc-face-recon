@@ -17,8 +17,15 @@ WORKDIR /app
 RUN mkdir -p /models && \
   if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
 
+WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Tenta instalar cada pacote individualmente
+RUN cat requirements.txt | while read package; do \
+    echo "=== INSTALANDO: $package ===" && \
+    pip install --no-cache-dir "$package" || \
+    (echo "=== FALHA EM: $package ===" && exit 1); \
+    done
 
 # depois de instalar requirements
 RUN python - <<'PY'

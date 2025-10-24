@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-# Produção (Coolify) — força amd64 e APT em uma única linha robusta
+# Produção (Coolify) — sem apt-get
 
 FROM --platform=linux/amd64 python:3.11-slim
 
@@ -8,7 +8,6 @@ ENV SERVICE_NAME=svc-face-recon \
     INSIGHTFACE_HOME=/models \
     HF_HOME=/models \
     ORT_DISABLE_CUDA=1 \
-    DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UVICORN_WORKERS=2 \
@@ -18,20 +17,13 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# APT (retries + força IPv4) em um RUN único
-RUN set -eux; \
-    apt-get update -o Acquire::Retries=5 -o Acquire::http::No-Cache=true -o Acquire::ForceIPv4=true; \
-    apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg dirmngr \
-        libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential; \
-    rm -rf /var/lib/apt/lists/*
-
-# Cache de modelos e symlink para ~/.insightface
+# cache de modelos + symlink para ~/.insightface
 RUN mkdir -p /models && [ -e /root/.insightface ] || ln -s /models /root/.insightface
 
-# Dependências Python
+# === TUDO VIA WHEELS PYTHON (sem apt) ===
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Pré-download dos modelos (CPU)
 RUN python - <<'PY'

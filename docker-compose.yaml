@@ -27,7 +27,6 @@ services:
       start_period: 60s
     restart: unless-stopped
     networks: [monitoring]
-    profiles: ["app"]
 
   # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
   db-init:
@@ -58,7 +57,6 @@ services:
       echo ">> DDL aplicada com sucesso."
     restart: "no"
     networks: [monitoring]
-    profiles: ["app"]
 
   # -------------------- REDIS (cache) --------------------
   redis:
@@ -77,7 +75,6 @@ services:
       start_period: 5s
     restart: unless-stopped
     networks: [monitoring]
-    profiles: ["app"]
 
   # -------------------- APP --------------------
   svc-face-recon:
@@ -114,7 +111,6 @@ services:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped
     networks: [monitoring]
-    profiles: ["app"]
 
 networks:
   monitoring:

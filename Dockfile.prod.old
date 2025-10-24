@@ -35,7 +35,7 @@ RUN echo "Modelos serão baixados no primeiro uso da aplicação" && \
     mkdir -p /models
 
 COPY app ./app
-COPY .env.example ./.env
+COPY .env ./.env
 
 EXPOSE 8000
 ENV UVICORN_WORKERS=1

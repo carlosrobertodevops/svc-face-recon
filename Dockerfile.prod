@@ -11,8 +11,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copia requirements primeiro para aproveitar cache do Docker
 COPY requirements.txt .
 
-# Instala dependências Python (sem modelos)
-RUN pip install --no-cache-dir --user -r requirements.txt
+# Tenta instalar cada pacote individualmente
+RUN cat requirements.txt | while read package; do \
+    echo "=== INSTALANDO: $package ===" && \
+    pip install --no-cache-dir "$package" || \
+    (echo "=== FALHA EM: $package ===" && exit 1); \
+    done
+
 
 # Estágio 2: Runtime (imagem final leve)
 FROM python:3.11-slim

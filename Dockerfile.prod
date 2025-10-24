@@ -1,56 +1,72 @@
 # syntax=docker/dockerfile:1.6
-# Dockerfile.prod — amd64 (Coolify + local)
+# svc-face-recon/Dockerfile.prod
 
-FROM python:3.11
+ARG TARGETPLATFORM
+FROM --platform=${TARGETPLATFORM:-linux/amd64} python:3.11-slim
 
-ENV SERVICE_NAME=svc-face-recon \
-    ENVIRONMENT=production \
-    HOME=/app \
-    XDG_CACHE_HOME=/app/.cache \
-    INSIGHTFACE_HOME=/app/.insightface \
-    HF_HOME=/app/.models \
-    ORT_DISABLE_CUDA=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UVICORN_WORKERS=2 \
-    OMP_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+# ==========================
+# Configurações gerais
+# ==========================
+ENV SERVICE_NAME=svc-face-recon
+ENV INSIGHTFACE_HOME=/models
+ENV HF_HOME=/models
+ENV ORT_DISABLE_CUDA=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_NO_CACHE_DIR=1
+ENV UVICORN_WORKERS=2
 
 WORKDIR /app
 
-# 1) cache do pip e instalação só por wheels (amd64 tem wheels pra tudo que você usa)
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip setuptools wheel packaging && \
-    pip install --prefer-binary --only-binary=:all: --no-cache-dir -r requirements.txt
+# ==========================
+# Dependências de sistema
+# ==========================
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl && \
+    rm -rf /var/lib/apt/lists/*
 
-# 2) cria caches e tenta baixar modelos (se falhar, não quebra o build)
+# ==========================
+# Diretórios de cache e modelos
+# ==========================
+RUN mkdir -p /models && mkdir -p /root/.insightface || true
+
+# ==========================
+# Instala dependências Python
+# ==========================
+COPY requirements.txt .
+
+# Ferramentas básicas do pip
+RUN python -m pip install --upgrade pip==24.2 setuptools==70.0.0 wheel==0.44.0
+
+# Núcleo científico (tem wheels estáveis)
+RUN pip install numpy==2.1.2 onnxruntime==1.19.2 pillow==10.4.0
+
+# Demais dependências do requirements.txt
+RUN pip install -r requirements.txt
+
+# ==========================
+# Pré-download dos modelos insightface
+# ==========================
 RUN python - <<'PY'
 import os
-env = {
-  "XDG_CACHE_HOME": "/app/.cache",
-  "INSIGHTFACE_HOME": "/app/.insightface",
-  "HF_HOME": "/app/.models",
-  "ORT_DISABLE_CUDA": "1",
-}
-os.environ.update(env)
-for d in env.values():
-    if d.startswith("/app/"):
-        os.makedirs(d, exist_ok=True)
-try:
-    from insightface.app import FaceAnalysis
-    app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
-    app.prepare(ctx_id=-1, det_size=(640,640))
-    print("Modelos baixados em:", env["INSIGHTFACE_HOME"])
-except Exception as e:
-    print("[WARN] Pré-download opcional falhou:", e)
+os.environ["INSIGHTFACE_HOME"]="/models"
+os.environ["ORT_DISABLE_CUDA"]="1"
+from insightface.app import FaceAnalysis
+app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
+app.prepare(ctx_id=-1, det_size=(640,640))
+print("Modelos baixados em:", os.environ["INSIGHTFACE_HOME"])
 PY
 
-# 3) código
+# ==========================
+# Copia código da aplicação
+# ==========================
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
+
+# ==========================
+# Comando padrão
+# ==========================
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

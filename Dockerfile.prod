@@ -29,10 +29,10 @@ RUN set -eux; \
 RUN pip install --upgrade pip setuptools wheel
 
 # Copia requirements primeiro para aproveitar cache do Docker
-COPY requirements.new.txt .
+COPY requirements.txt .
 
 # Instala todas as dependências de uma vez (mais simples)
-RUN python -m pip install --no-cache-dir -r requirements.mew.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # Cria diretório para modelos e cache
 RUN mkdir -p /tmp/insightface /root/.insightface && \

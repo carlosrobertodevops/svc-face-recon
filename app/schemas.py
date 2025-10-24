@@ -96,7 +96,6 @@
 #     ok: bool
 #     distance: float
 #     error: Optional[str] = None
-
 # app/schema.py
 from __future__ import annotations
 

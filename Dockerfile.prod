@@ -1,44 +1,43 @@
 # syntax=docker/dockerfile:1.6
-# svc-face-recon/Dockerfile.prod — Produção (Coolify) SEM --platform
+# svc-face-recon/Dockerfile.prod — Produção (Coolify)
 
 FROM python:3.11-slim
 
-# Identidade e ambiente
-ENV SERVICE_NAME=svc-face-recon
-ENV ENVIRONMENT=production
-
-# Cache/modelos InsightFace e CPU-only
-ENV INSIGHTFACE_HOME=/models
-ENV HF_HOME=/models
-ENV ORT_DISABLE_CUDA=1
-
-# Performance/logs
-ENV DEBIAN_FRONTEND=noninteractive
-ENV OMP_NUM_THREADS=1
-ENV MKL_NUM_THREADS=1
-ENV OPENBLAS_NUM_THREADS=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PIP_NO_CACHE_DIR=1
-# produção com 2 workers
-ENV UVICORN_WORKERS=2
+ENV SERVICE_NAME=svc-face-recon \
+    ENVIRONMENT=production \
+    INSIGHTFACE_HOME=/models \
+    HF_HOME=/models \
+    ORT_DISABLE_CUDA=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    UVICORN_WORKERS=2
 
 WORKDIR /app
 
-# Dependências nativas
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \
- && rm -rf /var/lib/apt/lists/*
+# --- APT mais resiliente em CI (Coolify) ---
+# - força IPv4 (evita mirrors que só respondem IPv6)
+# - aumenta retries e desabilita pipeline
+RUN set -eux; \
+    printf 'Acquire::Retries "5";\nAcquire::http::No-Cache "true";\nAcquire::http::Pipeline-Depth "0";\nAcquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99coolify-ci; \
+    sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list; \
+    apt-get update -y; \
+    apt-get install -y --no-install-recommends ca-certificates apt-transport-https gnupg dirmngr; \
+    apt-get install -y --no-install-recommends libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl; \
+    rm -rf /var/lib/apt/lists/*
 
-# Cache e symlink de modelos
-RUN mkdir -p /models && \
-    if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
+# Cache de modelos + symlink
+RUN mkdir -p /models && if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
 
-# Python deps
+# Dependências Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pré-download dos modelos (CPU)
+# Pré-download de modelos (CPU)
 RUN python - <<'PY'
 import os
 os.environ["INSIGHTFACE_HOME"]="/models"
@@ -49,7 +48,7 @@ app.prepare(ctx_id=-1, det_size=(640,640))
 print("Modelos baixados para:", os.environ["INSIGHTFACE_HOME"])
 PY
 
-# Código da app
+# Código
 COPY app ./app
 COPY .env.example ./.env
 

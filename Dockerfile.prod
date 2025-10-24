@@ -1,11 +1,13 @@
 # syntax=docker/dockerfile:1.6
-# Dockerfile.prod — build estável (sem apt-get e sem criar nada em /root)
+# Dockerfile.prod — build estável (sem apt-get e sem mkdir em shell)
 
 FROM python:3.11
 
-# Configurações em runtime e locais de cache 100% graváveis
+# Tudo de cache fica dentro de /app
 ENV SERVICE_NAME=svc-face-recon \
     ENVIRONMENT=production \
+    HOME=/app \
+    XDG_CACHE_HOME=/app/.cache \
     INSIGHTFACE_HOME=/app/.insightface \
     HF_HOME=/app/.models \
     ORT_DISABLE_CUDA=1 \
@@ -18,34 +20,39 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# Cria diretórios de cache DENTRO do /app (evita /root e problemas no builder)
-RUN mkdir -p /app/.insightface /app/.models
-
-# Dependências Python via wheels (evita apt-get no Coolify)
+# Só wheels Python (evita apt-get; robusto no Coolify)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Pré-download dos modelos do insightface (CPU). Se não conseguir, NÃO falha o build.
+# Pré-download opcional dos modelos (cria diretórios via Python; não falha o build se der erro)
 RUN python - <<'PY'
-import os
+import os, errno
+os.environ.setdefault("HOME", "/app")
+os.environ.setdefault("XDG_CACHE_HOME", "/app/.cache")
 os.environ.setdefault("INSIGHTFACE_HOME", "/app/.insightface")
+os.environ.setdefault("HF_HOME", "/app/.models")
 os.environ["ORT_DISABLE_CUDA"] = "1"
+
+for p in (os.environ["INSIGHTFACE_HOME"], os.environ["HF_HOME"], os.environ["XDG_CACHE_HOME"]):
+    try:
+        os.makedirs(p, exist_ok=True)
+    except Exception as e:
+        print("[WARN] os.makedirs falhou para", p, "->", e)
+
 try:
     from insightface.app import FaceAnalysis
     app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
     app.prepare(ctx_id=-1, det_size=(640,640))
     print("✔ Modelos prontos em:", os.environ["INSIGHTFACE_HOME"])
 except Exception as e:
-    # Em alguns builders sem rede/SSL, pode falhar — seguimos em frente.
+    # Em ambiente de build sem rede/SSL, pode falhar — seguimos em frente.
     print("[WARN] Pré-download opcional falhou:", e)
 PY
 
-# Código da aplicação
+# Código
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-
-# Uvicorn direto (sem scripts externos)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

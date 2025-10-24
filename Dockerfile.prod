@@ -31,6 +31,9 @@ RUN pip install --upgrade pip setuptools wheel
 # Copia requirements primeiro para aproveitar cache do Docker
 COPY requirements.txt .
 
+# Instala dependências básicas primeiro
+RUN python -m pip install --no-cache-dir flask gunicorn
+
 # Instala todas as dependências de uma vez (mais simples)
 RUN python -m pip install --no-cache-dir -r requirements.txt
 

@@ -24,16 +24,7 @@ RUN set -eux; \
         ca-certificates curl libgl1 libglib2.0-0 libstdc++6 libgomp1; \
     rm -rf /var/lib/apt/lists/*
 
-# Pacotes pesados por wheels (evita build nativo) - compatível com seu requirements.txt
-RUN python -m pip install --only-binary=:all: --prefer-binary \
-      numpy==2.1.2 \
-      pillow==10.4.0 \
-      onnxruntime==1.19.2 \
-      opencv-python-headless==4.10.0.84 \
-      scipy==1.13.1 \
-      scikit-image==0.24.0
-
-# Demais deps do projeto
+# Instala todas as dependências de uma vez (incluindo as pesadas)
 COPY requirements.txt .
 RUN python -m pip install --only-binary=:all: --prefer-binary -r requirements.txt
 

@@ -1,41 +1,56 @@
-# svc-face-recon/Dockerfile
-FROM python:3.11
+# syntax=docker/dockerfile:1.6
+# svc-face-recon/Dockerfile.prod — Coolify (robusto)
 
-ENV SERVICE_NAME=svc-face-recon
-# cache de modelos no volume
-ENV INSIGHTFACE_HOME=/models
-ENV HF_HOME=/models
+FROM python:3.11-slim
 
-USER root
-# Dependências nativas (Debian 13/Trixie → libgl1)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl 
-#   && rm -rf /var/lib/apt/lists/*
+ENV SERVICE_NAME=svc-face-recon \
+    INSIGHTFACE_HOME=/tmp/insightface \
+    HF_HOME=/tmp/insightface \
+    ORT_DISABLE_CUDA=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=300 \
+    PIP_RETRIES=5
 
 WORKDIR /app
 
-# Garante diretório de cache e um symlink fallback para ~/.insightface
-RUN mkdir -p /models && \
-  if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
+# SO deps mínimos (IPv4 + retries p/ ambientes restritos)
+RUN set -eux; \
+    printf 'Acquire::Retries "5";\nAcquire::http::No-Cache "true";\nAcquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99ci; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl libgl1 libglib2.0-0 libstdc++6 libgomp1; \
+    rm -rf /var/lib/apt/lists/*
 
+# Pacotes pesados por wheels (evita build nativo)
+RUN python -m pip install --only-binary=:all: --prefer-binary \
+      numpy==2.1.2 \
+      pillow==10.4.0 \
+      onnxruntime==1.19.2 \
+      opencv-python-headless==4.10.0.84 \
+      scipy==1.13.1 \
+      scikit-image==0.24.0
+
+# Demais deps do projeto
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --only-binary=:all: --prefer-binary -r requirements.txt
 
-# depois de instalar requirements
-RUN python - <<'PY'
+# Pré-download dos modelos (não quebra o build se falhar)
+RUN python - <<'PY' || true
 import os
-os.environ["INSIGHTFACE_HOME"]="/models"
+os.environ["INSIGHTFACE_HOME"]="/tmp/insightface"
 os.environ["ORT_DISABLE_CUDA"]="1"
 from insightface.app import FaceAnalysis
 app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
 app.prepare(ctx_id=-1, det_size=(640,640))
-print("Modelos baixados para:", os.environ["INSIGHTFACE_HOME"])
+print("Modelos preparados em", os.environ["INSIGHTFACE_HOME"])
 PY
 
+# Código
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-ENV UVICORN_WORKERS=1
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]

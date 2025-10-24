@@ -6,6 +6,7 @@ ENV SERVICE_NAME=svc-face-recon
 ENV INSIGHTFACE_HOME=/models
 ENV HF_HOME=/models
 
+USER root
 # Dependências nativas (Debian 13/Trixie → libgl1)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \

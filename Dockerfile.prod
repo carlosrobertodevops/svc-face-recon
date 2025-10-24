@@ -33,9 +33,9 @@ RUN python -m pip install --upgrade pip setuptools wheel
 COPY requirements.txt .
 
 # Tenta instalar com fallbacks
-RUN python -m pip install --no-cache-dir --timeout=120 -r requirements.txt || \
-    (echo "Primeira tentativa falhou, tentando com retry..." && \
-     python -m pip install --no-cache-dir --timeout=120 -r requirements.txt)
+# Substitua a linha problemática por esta abordagem:
+RUN cat requirements.txt && \
+    python -m pip install --no-cache-dir --timeout=120 -r requirements.txt
 
 # Cria diretório para modelos e cache
 RUN mkdir -p /tmp/insightface /root/.insightface && \

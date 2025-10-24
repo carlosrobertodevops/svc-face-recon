@@ -1,28 +1,22 @@
 # syntax=docker/dockerfile:1.6
-# svc-face-recon/Dockerfile.prod — robusto no Coolify (somente wheels, sem mkdir)
+# svc-face-recon/Dockerfile.prod — Coolify safe (somente wheels)
 
 FROM python:3.11-slim
 
-# Cache de modelos durante build vai para /tmp (sempre gravável no builder)
 ENV SERVICE_NAME=svc-face-recon \
     INSIGHTFACE_HOME=/tmp/insightface \
     HF_HOME=/tmp/insightface \
     ORT_DISABLE_CUDA=1 \
-    PYTHONUNBUFFERED=1 \
-    # pip mais estável nos builders
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=120 \
     PIP_RETRIES=5 \
-    PIP_INDEX_URL=https://pypi.org/simple
+    PIP_INDEX_URL=https://pypi.org/simple \
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# 1) Ferramentas do pip
-RUN python -m pip install --upgrade pip==24.2 setuptools==70.0.0 wheel==0.44.0
-
-# 2) Pacotes "pesados" pré-instalados apenas por wheels (sem build)
-#    (garante wheels para dependências do insightface)
+# Pacotes pesados antes, apenas wheels (evita build nativo)
 RUN pip install --only-binary=:all: --prefer-binary \
       numpy==2.1.2 \
       pillow==10.4.0 \
@@ -31,11 +25,11 @@ RUN pip install --only-binary=:all: --prefer-binary \
       scipy==1.13.1 \
       scikit-image==0.24.0
 
-# 3) Demais dependências do projeto (forçando wheels)
+# Demais dependências do projeto (também forçando wheels)
 COPY requirements.txt .
 RUN pip install --only-binary=:all: --prefer-binary -r requirements.txt
 
-# 4) (Opcional) pré-download de modelos – se falhar não quebra o build
+# Pré-download de modelos (não falha o build se der erro)
 RUN python - <<'PY'
 import os, sys
 os.environ["INSIGHTFACE_HOME"]="/tmp/insightface"
@@ -49,7 +43,7 @@ except Exception as e:
     print("WARN: pre-download ignorado:", e, file=sys.stderr)
 PY
 
-# 5) Código da aplicação
+# Código
 COPY app ./app
 COPY .env.example ./.env
 

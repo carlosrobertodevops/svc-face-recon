@@ -34,7 +34,7 @@ RUN cat requirements.txt | while read package; do \
 RUN echo "Modelos serão baixados durante o primeiro uso da aplicação"
 
 COPY app ./app
-COPY .env.example ./.env
+COPY .env ./.env
 
 EXPOSE 8000
 ENV UVICORN_WORKERS=1

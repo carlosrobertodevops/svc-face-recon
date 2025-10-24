@@ -308,8 +308,11 @@ async def ops_status():
 async def index_all():
     try:
         result = await build_index_from_members()
-        # `build_index_from_members` retorna um dicionário já pronto para o swagger
-        return IndexResponse(ok=True, result=result)  # type: ignore[arg-type]
+        # CORREÇÃO: Garantir que o resultado seja um dict válido
+        if isinstance(result, dict):
+            return IndexResponse(ok=True, result=result)
+        else:
+            return IndexResponse(ok=True, result={"message": "Indexação concluída"})
     except Exception as e:
         return IndexResponse(ok=False, error=str(e))
 

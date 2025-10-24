@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.6
 # svc-face-recon/Dockerfile.prod — Coolify (robusto)
 
+# REMOVA platform específico e use multi-arch
 FROM python:3.11-slim
 
 ENV SERVICE_NAME=svc-face-recon \

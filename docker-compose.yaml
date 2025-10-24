@@ -82,7 +82,7 @@ services:
 
   # -------------------- APP --------------------
   svc-face-recon:
-    platform: linux/amd64
+    # platform: linux/amd64
     build:
       context: .
       dockerfile: Dockerfile.prod
@@ -192,7 +192,6 @@ services:
 networks:
   monitoring:
     driver: bridge
-
 # name: svc-face-recon-local
 
 # services:
@@ -224,7 +223,6 @@ networks:
 #     restart: unless-stopped
 #     networks: [monitoring]
 #     profiles: ["app"]
-    
 
 #   # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
 #   db-init:

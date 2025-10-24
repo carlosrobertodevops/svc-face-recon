@@ -380,6 +380,7 @@ async def build_index_from_members() -> dict:
             print(f"[WARN] Falha ao reconstruir cache: {e}")
 
         finished_at = int(time.time())
+        duration_sec = finished_at - started_at
         status.update(
             {
                 "processed": processed,
@@ -390,20 +391,35 @@ async def build_index_from_members() -> dict:
                 "cache_reloaded": cache_ok,
                 "state": "done",
                 "finished_at": finished_at,
-                "duration_sec": finished_at - started_at,
+                "duration_sec": duration_sec,
             }
         )
         await _set_status(rds, status_key, status)
 
-        return {
-            "indexed": indexed,
+        # CORREÇÃO: Retornar um dicionário com estrutura correta que corresponde ao schema
+        result = {
             "total": total,
+            "indexed": indexed,
             "skipped_no_photo": skipped_no_photo,
             "skipped_no_face": skipped_no_face,
             "errors": errors,
             "cache_reloaded": cache_ok,
-            "progress": status,
+            "progress": {
+                "started_at": started_at,
+                "duration_sec": duration_sec,
+                "total": total,
+                "processed": processed,
+                "indexed": indexed,
+                "skipped_no_photo": skipped_no_photo,
+                "skipped_no_face": skipped_no_face,
+                "errors": errors,
+                "cache_reloaded": cache_ok,
+                "state": "done",
+                "finished_at": finished_at,
+            },
         }
+
+        return result
 
     finally:
         # libera lock

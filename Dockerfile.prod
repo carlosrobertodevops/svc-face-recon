@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-# Produção (Coolify) — sem apt-get
+# Produção (Coolify) — sem apt-get, robusto p/ symlink
 
 FROM --platform=linux/amd64 python:3.11-slim
 
@@ -17,10 +17,15 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# cache de modelos + symlink para ~/.insightface
-RUN mkdir -p /models && [ -e /root/.insightface ] || ln -s /models /root/.insightface
+# cache de modelos + symlink robusto para ~/.insightface
+RUN set -eux; \
+    mkdir -p /models; \
+    if [ -L /root/.insightface ] || [ -d /root/.insightface ] || [ -f /root/.insightface ]; then \
+        rm -rf /root/.insightface; \
+    fi; \
+    ln -s /models /root/.insightface
 
-# === TUDO VIA WHEELS PYTHON (sem apt) ===
+# Somente wheels Python (sem apt-get)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt

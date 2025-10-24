@@ -16,26 +16,31 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# SO deps mínimos (IPv4 + retries p/ ambientes restritos) - COM GIT INCLUÍDO
+# SO deps completas (com git e ferramentas de compilação)
 RUN set -eux; \
     printf 'Acquire::Retries "5";\nAcquire::http::No-Cache "true";\nAcquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99ci; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        ca-certificates curl git libgl1 libglib2.0-0 libstdc++6 libgomp1; \
+        ca-certificates curl git build-essential \
+        libgl1 libglib2.0-0 libstdc++6 libgomp1 pkg-config \
+        cmake make g++; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Cache de pip para builds mais rápidos
-RUN pip install --upgrade pip setuptools wheel
+# Upgrade pip e ferramentas
+RUN python -m pip install --upgrade pip setuptools wheel
 
-# Copia requirements primeiro para aproveitar cache do Docker
+# Copia requirements primeiro
 COPY requirements.txt .
 
-# Instala dependências básicas primeiro (removido - conflito com requirements.txt)
-RUN python -m pip install --no-cache-dir flask gunicorn
+# DEBUG: Mostra conteúdo do requirements
+RUN echo "=== DEBUG: Conteúdo do requirements.txt ===" && \
+    cat requirements.txt && \
+    echo "=== FIM DEBUG ==="
 
-# Instala todas as dependências de uma vez (mais simples)
-RUN python -m pip install -r requirements.txt --no-cache-dir
+# Instala dependências com retry e verbose
+RUN python -m pip install -v --no-cache-dir --timeout=180 \
+    --retries=3 -r requirements.txt
 
 # Cria diretório para modelos e cache
 RUN mkdir -p /tmp/insightface /root/.insightface && \
@@ -69,7 +74,7 @@ PY
 COPY app ./app
 COPY .env.example ./.env
 
-# Health check simplificado (sem curl)
+# Health check simplificado
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
 

@@ -7,7 +7,6 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 numpy==2.1.2
 Pillow==10.4.0
-insightface==0.2.1
 onnxruntime==1.19.2
 psycopg[binary]==3.2.3
 prometheus-fastapi-instrumentator==6.1.0
@@ -18,3 +17,4 @@ redis>=5.0.4
 opencv-python-headless==4.10.0.84
 scipy==1.13.1
 scikit-image==0.24.0
+insightface @ git+https://github.com/deepinsight/insightface.git

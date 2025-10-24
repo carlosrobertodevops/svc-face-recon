@@ -11,22 +11,22 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no_env_coolify}
       POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
-    # Sem portas em produção (acesso interno)
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} -h 127.0.0.1 || exit 1",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} || exit 1",
         ]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 40
+      start_period: 60s
     restart: unless-stopped
     networks: [monitoring]
 
-  # --- INIT DO BANCO (cria extensão + tabela) ---
+  # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
   db-init:
     image: postgres:16-alpine
     container_name: svc-face-recon-db-init
@@ -35,16 +35,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: >
-      sh -c "
-      export PGPASSWORD='${POSTGRES_PASSWORD:?defina_no_env_coolify}' &&
-      psql -v ON_ERROR_STOP=1 -h db -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}
-      -c \"CREATE EXTENSION IF NOT EXISTS vector;\"
-      -c \"CREATE TABLE IF NOT EXISTS member_faces (
-            member_id text PRIMARY KEY,
-            embedding vector(512) NOT NULL
-          );\"
-      "
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
+      export PGPASSWORD="${POSTGRES_PASSWORD:?defina_no_env_coolify}"
+      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-svc_face_recon}" <<'SQL'
+      CREATE EXTENSION IF NOT EXISTS vector;
+
+      CREATE TABLE IF NOT EXISTS member_faces (
+        member_id text PRIMARY KEY,
+        embedding vector(512) NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS member_faces_hnsw
+      ON member_faces USING hnsw (embedding vector_l2_ops)
+      WITH (m = 16, ef_construction = 200);
+      SQL
+      echo ">> DDL aplicada com sucesso."
     restart: "no"
     networks: [monitoring]
 
@@ -55,12 +63,12 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - ./_data/redis:/data
-    # Sem portas externas em produção
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
-      retries: 10
+      retries: 20
+      start_period: 5s
     restart: unless-stopped
     networks: [monitoring]
 
@@ -68,16 +76,14 @@ services:
   svc-face-recon:
     build:
       context: .
+      dockerfile: Dockerfile
     container_name: svc-face-recon
     env_file:
       - .env.coolify
     environment:
-      # Banco interno do stack (pgvector) em produção
-      # (corrigido: removido '}' sobrando no final)
-      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no_env_coolify}@db:5432/${POSTGRES_DB:-svc_face_recon}}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no_env_coolify}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}
-      # Redis interno
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       db:
@@ -87,13 +93,13 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000" # expõe para ser chamado externamente (microserviço)
+      - "8000:8000"
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped
     networks: [monitoring]
 
-  # -------------------- OBSERVABILITY (profile: obs) --------------------
+  # -------------------- OBSERVABILITY (opcional) --------------------
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: prometheus
@@ -104,10 +110,6 @@ services:
     volumes:
       - ./observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observabilidade/prometheus/data:/prometheus
-    # Se quiser expor no Coolify, libere a porta abaixo;
-    # Caso contrário, deixe somente rede interna.
-    # ports:
-    #   - "9090:9090"
     restart: unless-stopped
     networks: [monitoring]
 
@@ -121,27 +123,18 @@ services:
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
-    # Se quiser expor no Coolify, libere a porta:
-    # ports:
-    #   - "3000:3000"
     restart: unless-stopped
     networks: [monitoring]
 
   node-exporter:
     image: prom/node-exporter:v1.8.1
     container_name: node-exporter
-    # Em produção normalmente sem portas públicas
-    # ports:
-    #   - "9100:9100"
     restart: unless-stopped
     networks: [monitoring]
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
     container_name: cadvisor
-    # Em produção normalmente sem portas públicas
-    # ports:
-    #   - "8085:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
@@ -166,10 +159,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro
       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
-    # Em produção, normalmente não expõe as portas do agente
-    # ports:
-    #   - "8126:8126"
-    #   - "8125:8125/udp"
     restart: unless-stopped
     networks: [monitoring]
 

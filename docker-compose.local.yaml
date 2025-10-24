@@ -16,18 +16,20 @@ services:
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
     healthcheck:
+      # usar host explícito evita resolução DNS dentro do HC
       test:
         [
           "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} || exit 1",
         ]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 40
+      start_period: 60s
     restart: unless-stopped
     networks: [monitoring]
 
-  # --- INIT DO BANCO (cria extensão + tabela) ---
+  # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
   db-init:
     image: postgres:16-alpine
     container_name: svc-face-recon-db-init
@@ -36,16 +38,24 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: >
-      sh -c "
-      export PGPASSWORD='${POSTGRES_PASSWORD:-Pwdsvcfacerecon}' &&
-      psql -v ON_ERROR_STOP=1 -h db -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon}
-      -c \"CREATE EXTENSION IF NOT EXISTS vector;\"
-      -c \"CREATE TABLE IF NOT EXISTS member_faces (
-            member_id text PRIMARY KEY,
-            embedding vector(512) NOT NULL
-          );\"
-      "
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      set -e
+      echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
+      export PGPASSWORD="${POSTGRES_PASSWORD:-Pwdsvcfacerecon}"
+      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-svc_face_recon}" <<'SQL'
+      CREATE EXTENSION IF NOT EXISTS vector;
+
+      CREATE TABLE IF NOT EXISTS member_faces (
+        member_id text PRIMARY KEY,
+        embedding vector(512) NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS member_faces_hnsw
+      ON member_faces USING hnsw (embedding vector_l2_ops)
+      WITH (m = 16, ef_construction = 200);
+      SQL
+      echo ">> DDL aplicada com sucesso."
     restart: "no"
     networks: [monitoring]
 
@@ -63,6 +73,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
+      start_period: 5s
     restart: unless-stopped
     networks: [monitoring]
 
@@ -71,7 +82,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      network: host
     platform: linux/amd64
     container_name: svc-face-recon
     ports:
@@ -79,7 +89,6 @@ services:
     env_file:
       - .env.local
     environment:
-      # >>> Forçado para o serviço 'db' do compose (ignora qualquer DATABASE_URL do .env.local)
       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable"
       HOST: ${HOST:-0.0.0.0}
       PORT: ${PORT:-8000}

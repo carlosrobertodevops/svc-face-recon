@@ -1,8 +1,9 @@
-#.env.local
-#.env
+.env.local
+.env
+.env.coolify
 db-init/
 .cache/insightface/models
-_data/*
+_data
 observability/grafana/data
 observability/prometheus/data
 docker-compose.local.old.yaml

@@ -1,0 +1,95 @@
+name: svc-face-recon
+
+services:
+  # -------------------- DATABASE (pgvector) --------------------
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: svc-face-recon-db
+    env_file:
+      - .env.coolify
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina_no_env_coolify}
+      POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
+    volumes:
+      - ./_data/pg:/var/lib/postgresql/data
+    # inicialização 100% dentro do compose (sem serviço extra)
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      set -e
+      echo "💡 Gerando script de inicialização SQL..."
+      mkdir -p /docker-entrypoint-initdb.d
+      cat > /docker-entrypoint-initdb.d/01_init.sql <<'SQL'
+      CREATE EXTENSION IF NOT EXISTS vector;
+
+      CREATE TABLE IF NOT EXISTS member_faces (
+        member_id text PRIMARY KEY,
+        embedding vector(512) NOT NULL
+      );
+
+      -- índice HNSW recomendado para busca vetorial
+      CREATE INDEX IF NOT EXISTS member_faces_hnsw
+      ON member_faces USING hnsw (embedding vector_l2_ops)
+      WITH (m = 16, ef_construction = 200);
+      SQL
+
+      echo "🚀 Iniciando Postgres..."
+      exec docker-entrypoint.sh postgres
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} -h 127.0.0.1 || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+    restart: unless-stopped
+    networks: [monitoring]
+
+  # -------------------- REDIS (cache) --------------------
+  redis:
+    image: redis:7-alpine
+    container_name: svc-face-recon-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./_data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks: [monitoring]
+
+  # -------------------- APP --------------------
+  svc-face-recon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: svc-face-recon
+    env_file:
+      - .env.coolify
+    environment:
+      # força o host "db" do compose (ignora DATABASE_URL externo se vier vazio)
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?defina_no_env_coolify}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable}
+      HOST: ${HOST:-0.0.0.0}
+      PORT: ${PORT:-8000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000" # expose para o Coolify fazer proxy/domínio
+    volumes:
+      - ./.cache/insightface:/root/.insightface
+    restart: unless-stopped
+    networks: [monitoring]
+
+networks:
+  monitoring:
+    driver: bridge

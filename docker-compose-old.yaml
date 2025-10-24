@@ -1,11 +1,12 @@
 # docker-compose.yaml — usado pelo Coolify (mesmo conteúdo do docker-compose.coolify.yaml)
-# name: svc-face-recon-coolify
+name: svc-face-recon-coolify
+
 services:
   db:
     image: pgvector/pgvector:pg16
     container_name: svc-face-recon-db
     env_file:
-      - .env.coolify
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -29,7 +30,7 @@ services:
     image: postgres:16-alpine
     container_name: svc-face-recon-db-init
     env_file:
-      - .env.coolify
+      - .env
     depends_on:
       db:
         condition: service_healthy
@@ -73,7 +74,7 @@ services:
       dockerfile: Dockerfile
     container_name: svc-face-recon
     env_file:
-      - .env.coolify
+      - .env
     environment:
       DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
       HOST: ${HOST}
@@ -108,7 +109,7 @@ services:
     image: grafana/grafana:11.2.0
     container_name: grafana
     env_file:
-      - .env.coolify
+      - .env
     volumes:
       - ./observabilidade/grafana/data:/var/lib/grafana
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
@@ -138,7 +139,7 @@ services:
     image: datadog/agent:7.52.0
     container_name: datadog
     env_file:
-      - .env.coolify
+      - .env
     environment:
       DD_SITE: ${DD_SITE}
       DD_LOGS_ENABLED: ${DD_LOGS_ENABLED}

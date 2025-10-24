@@ -16,12 +16,12 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# SO deps mínimos (IPv4 + retries p/ ambientes restritos)
+# SO deps mínimos (IPv4 + retries p/ ambientes restritos) - COM GIT INCLUÍDO
 RUN set -eux; \
     printf 'Acquire::Retries "5";\nAcquire::http::No-Cache "true";\nAcquire::ForceIPv4 "true";\n' > /etc/apt/apt.conf.d/99ci; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-        ca-certificates curl libgl1 libglib2.0-0 libstdc++6 libgomp1; \
+        ca-certificates curl git libgl1 libglib2.0-0 libstdc++6 libgomp1; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -31,8 +31,8 @@ RUN pip install --upgrade pip setuptools wheel
 # Copia requirements primeiro para aproveitar cache do Docker
 COPY requirements.txt .
 
-# Instala dependências básicas primeiro
-RUN python -m pip install --no-cache-dir flask gunicorn
+# Instala dependências básicas primeiro (removido - conflito com requirements.txt)
+# RUN python -m pip install --no-cache-dir flask gunicorn
 
 # Instala todas as dependências de uma vez (mais simples)
 RUN python -m pip install --no-cache-dir -r requirements.txt

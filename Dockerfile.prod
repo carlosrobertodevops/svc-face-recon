@@ -32,10 +32,10 @@ RUN pip install --upgrade pip setuptools wheel
 COPY requirements.txt .
 
 # Instala dependências básicas primeiro (removido - conflito com requirements.txt)
-# RUN python -m pip install --no-cache-dir flask gunicorn
+RUN python -m pip install --no-cache-dir flask gunicorn
 
 # Instala todas as dependências de uma vez (mais simples)
-RUN python -m pip install -r requirements.txt
+RUN python -m pip install -r requirements.txt --no-cache-dir
 
 # Cria diretório para modelos e cache
 RUN mkdir -p /tmp/insightface /root/.insightface && \

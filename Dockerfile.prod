@@ -1,26 +1,39 @@
-# svc-face-recon/Dockerfile
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1.6
+# Produção (Coolify) — força amd64 e APT em uma única linha robusta
 
-ENV SERVICE_NAME=svc-face-recon
-# cache de modelos no volume
-ENV INSIGHTFACE_HOME=/models
-ENV HF_HOME=/models
+FROM --platform=linux/amd64 python:3.11-slim
 
-# Dependências nativas (Debian 13/Trixie → libgl1)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \
-  && rm -rf /var/lib/apt/lists/*
+ENV SERVICE_NAME=svc-face-recon \
+    ENVIRONMENT=production \
+    INSIGHTFACE_HOME=/models \
+    HF_HOME=/models \
+    ORT_DISABLE_CUDA=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UVICORN_WORKERS=2 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1
 
 WORKDIR /app
 
-# Garante diretório de cache e um symlink fallback para ~/.insightface
-RUN mkdir -p /models && \
-  if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
+# APT (retries + força IPv4) em um RUN único
+RUN set -eux; \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::No-Cache=true -o Acquire::ForceIPv4=true; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg dirmngr \
+        libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential; \
+    rm -rf /var/lib/apt/lists/*
 
+# Cache de modelos e symlink para ~/.insightface
+RUN mkdir -p /models && [ -e /root/.insightface ] || ln -s /models /root/.insightface
+
+# Dependências Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# depois de instalar requirements
+# Pré-download dos modelos (CPU)
 RUN python - <<'PY'
 import os
 os.environ["INSIGHTFACE_HOME"]="/models"
@@ -31,10 +44,9 @@ app.prepare(ctx_id=-1, det_size=(640,640))
 print("Modelos baixados para:", os.environ["INSIGHTFACE_HOME"])
 PY
 
+# Código
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-ENV UVICORN_WORKERS=1
-
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

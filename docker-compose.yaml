@@ -60,7 +60,7 @@ services:
       echo ">> DDL aplicada com sucesso."
     restart: "no"
     networks: [monitoring]
-    profiles: [app"]
+    profiles: ["app"]
 
   # -------------------- REDIS (cache) --------------------
   redis:
@@ -79,6 +79,7 @@ services:
       start_period: 5s
     restart: unless-stopped
     networks: [monitoring]
+    profiles: ["app"]
 
   # -------------------- APP --------------------
   svc-face-recon:

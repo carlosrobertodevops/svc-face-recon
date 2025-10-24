@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1.6
-# svc-face-recon/Dockerfile.prod
+# svc-face-recon/Dockerfile.prod — compatível com Coolify (sem mkdir no build)
 
 FROM python:3.11-slim
 
+# Tudo que precisa ser gravável durante o build vai para /tmp (sempre disponível)
 ENV SERVICE_NAME=svc-face-recon \
-    INSIGHTFACE_HOME=/app/.models \
-    HF_HOME=/app/.models \
+    INSIGHTFACE_HOME=/tmp/insightface \
+    HF_HOME=/tmp/insightface \
     ORT_DISABLE_CUDA=1 \
     PYTHONUNBUFFERED=1 \
     UVICORN_WORKERS=2 \
@@ -14,19 +15,16 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# Diretório de modelos DENTRO de /app (sempre permitido no builder)
-RUN mkdir -p /app/.models
-
-# Instala tudo via wheels (sem apt-get)
+# Instala 100% via wheels (sem apt-get)
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip==24.2 setuptools==70.0.0 wheel==0.44.0 && \
     pip install --prefer-binary numpy==2.1.2 onnxruntime==1.19.2 pillow==10.4.0 opencv-python-headless==4.10.0.84 && \
     pip install --prefer-binary -r requirements.txt
 
-# Pré-carrega modelos InsightFace em /app/.models (ignora falha de rede p/ não quebrar build)
+# (Opcional) pré-download — se falhar por rede, não quebra a imagem
 RUN python - <<'PY'
 import os, sys
-os.environ["INSIGHTFACE_HOME"]="/app/.models"
+os.environ["INSIGHTFACE_HOME"]="/tmp/insightface"
 os.environ["ORT_DISABLE_CUDA"]="1"
 try:
     from insightface.app import FaceAnalysis
@@ -34,10 +32,10 @@ try:
     app.prepare(ctx_id=-1, det_size=(640,640))
     print("Modelos prontos em", os.environ["INSIGHTFACE_HOME"])
 except Exception as e:
-    print("WARN: pre-download dos modelos ignorado:", e, file=sys.stderr)
+    print("WARN: pre-download ignorado:", e, file=sys.stderr)
 PY
 
-# Código
+# Código da app
 COPY app ./app
 COPY .env.example ./.env
 

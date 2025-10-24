@@ -26,7 +26,8 @@ ENV OPENBLAS_NUM_THREADS=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PIP_NO_CACHE_DIR=1
-ENV UVICORN_WORKERS=2  # produção com 2 workers
+# produção com 2 workers
+ENV UVICORN_WORKERS=2
 
 WORKDIR /app
 
@@ -59,4 +60,4 @@ COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]Ajustes

@@ -1,14 +1,25 @@
-# Estágio 1: Builder (faz o trabalho pesado)
-FROM python:3.11-slim as builder
+# svc-face-recon/Dockerfile
+FROM python:3.11-slim
+
+ENV SERVICE_NAME=svc-face-recon
+# cache de modelos no volume
+ENV INSIGHTFACE_HOME=/models
+ENV HF_HOME=/models
+
+# Dependências nativas (Debian 13/Trixie → libgl1)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Instala apenas dependências de sistema essenciais
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libstdc++6 libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+# Garante diretório de cache e um symlink fallback para ~/.insightface
+RUN mkdir -p /models
 
-# Copia requirements primeiro para aproveitar cache do Docker
+#&& \
+#  if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
+
+WORKDIR /app
 COPY requirements.txt .
 
 # Tenta instalar cada pacote individualmente
@@ -18,32 +29,18 @@ RUN cat requirements.txt | while read package; do \
     (echo "=== FALHA EM: $package ===" && exit 1); \
     done
 
+# **CORREÇÃO: Remove o download de modelos durante o build**
+# Os modelos serão baixados automaticamente no primeiro uso
+RUN echo "Modelos serão baixados no primeiro uso da aplicação" && \
+    mkdir -p /models
 
-# Estágio 2: Runtime (imagem final leve)
-FROM python:3.11-slim
-
-ENV SERVICE_NAME=svc-face-recon
-ENV INSIGHTFACE_HOME=/models
-ENV HF_HOME=/models
-ENV PYTHONPATH=/app
-ENV PATH=/root/.local/bin:$PATH
-
-# Instala apenas runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libstdc++6 libgomp1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /models
-
-WORKDIR /app
-
-# Copia dependências instaladas do estágio builder
-COPY --from=builder /root/.local /root/.local
-
-# Copia código da aplicação
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
+ENV UVICORN_WORKERS=1
 
-# Comando de inicialização (modelos serão baixados no runtime)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# syntax=docker/dockerfile:1.6
+# svc-face-recon/Dockerfile.prod - Coolify (Solução Gateway Timeout)

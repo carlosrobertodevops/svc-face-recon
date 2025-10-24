@@ -31,13 +31,7 @@ RUN pip install --upgrade pip setuptools wheel
 # Copia requirements primeiro para aproveitar cache do Docker
 COPY requirements.txt .
 
-# Instala dependências básicas primeiro (otimização de cache)
-RUN python -m pip install --no-cache-dir \
-    numpy==2.1.2 \
-    pillow==10.4.0 \
-    onnxruntime==1.19.2
-
-# Instala demais dependências
+# Instala todas as dependências de uma vez (mais simples)
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # Cria diretório para modelos e cache
@@ -72,16 +66,11 @@ PY
 COPY app ./app
 COPY .env.example ./.env
 
-# Health check para o Coolify
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Usuário não-root para segurança (opcional)
-RUN groupadd -r appuser && useradd -r -g appuser appuser && \
-    chown -R appuser:appuser /app
-USER appuser
+# Health check simplificado (sem curl)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
 
 EXPOSE 8000
 
-# Comando de inicialização com opções otimizadas
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--access-log"]
+# Comando de inicialização
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

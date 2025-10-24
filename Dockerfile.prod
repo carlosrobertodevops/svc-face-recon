@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1.6
-# Produção (Coolify) — sem apt-get, robusto p/ symlink
+# Produção (Coolify) — sem apt-get e sem symlink
 
 FROM --platform=linux/amd64 python:3.11-slim
 
 ENV SERVICE_NAME=svc-face-recon \
     ENVIRONMENT=production \
-    INSIGHTFACE_HOME=/models \
+    # use o diretório padrão do insightface diretamente (nada de symlink)
+    INSIGHTFACE_HOME=/root/.insightface \
     HF_HOME=/models \
     ORT_DISABLE_CUDA=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -17,15 +18,10 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# cache de modelos + symlink robusto para ~/.insightface
-RUN set -eux; \
-    mkdir -p /models; \
-    if [ -L /root/.insightface ] || [ -d /root/.insightface ] || [ -f /root/.insightface ]; then \
-        rm -rf /root/.insightface; \
-    fi; \
-    ln -s /models /root/.insightface
+# Cria os diretórios de cache (sem symlink!)
+RUN mkdir -p /root/.insightface /models
 
-# Somente wheels Python (sem apt-get)
+# Somente wheels Python (evita erros de apt-get no builder do Coolify)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
@@ -33,12 +29,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Pré-download dos modelos (CPU)
 RUN python - <<'PY'
 import os
-os.environ["INSIGHTFACE_HOME"]="/models"
+os.environ["INSIGHTFACE_HOME"]=os.environ.get("INSIGHTFACE_HOME","/root/.insightface")
 os.environ["ORT_DISABLE_CUDA"]="1"
 from insightface.app import FaceAnalysis
 app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
 app.prepare(ctx_id=-1, det_size=(640,640))
-print("Modelos baixados para:", os.environ["INSIGHTFACE_HOME"])
+print("Modelos em:", os.environ["INSIGHTFACE_HOME"])
 PY
 
 # Código

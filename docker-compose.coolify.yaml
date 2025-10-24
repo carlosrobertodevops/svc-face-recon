@@ -1,14 +1,4 @@
-# =============================================================================
-# Arquivo: docker-compose.yaml
-# Versão: v1.0.0
-# Objetivo: Orquestração (Coolify) — INALTERADO
-# Funções/métodos:
-# - Serviço svc-face-recon-db
-# =============================================================================
-
-# docker-compose.yaml — Coolify (produção)
-# Evita ${...} dentro de strings complexas (como URLs).
-# Defina DATABASE_URL completa nas variáveis de ambiente do Coolify.
+name: svc-face-recon-coolify
 
 services:
   # -------------------- DATABASE (pgvector) --------------------
@@ -16,18 +6,41 @@ services:
     image: pgvector/pgvector:pg16
     container_name: svc-face-recon-db
     env_file:
-      - .env
+      - .env.coolify
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
-    entrypoint: ["/bin/bash", "-c"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+    restart: unless-stopped
+    networks: [monitoring]
+
+  # --- INIT DDL ---
+  db-init:
+    image: postgres:16-alpine
+    container_name: svc-face-recon-db-init
+    env_file:
+      - .env.coolify
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
     command: |
       set -e
-      mkdir -p /docker-entrypoint-initdb.d
-      cat > /docker-entrypoint-initdb.d/01_init.sql <<'SQL'
+      echo ">> Aplicando DDL idempotente no Postgres (Coolify)..."
+      export PGPASSWORD="${POSTGRES_PASSWORD}"
+      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
       CREATE TABLE IF NOT EXISTS member_faces (
@@ -39,18 +52,8 @@ services:
       ON member_faces USING hnsw (embedding vector_l2_ops)
       WITH (m = 16, ef_construction = 200);
       SQL
-      exec docker-entrypoint.sh postgres
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 || exit 1",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 40
-      start_period: 90s
-    restart: unless-stopped
+      echo ">> DDL aplicada (Coolify)."
+    restart: "no"
     networks: [monitoring]
 
   # -------------------- REDIS (cache) --------------------
@@ -76,25 +79,20 @@ services:
       dockerfile: Dockerfile
     container_name: svc-face-recon
     env_file:
-      - .env
+      - .env.coolify
     environment:
-      # <- IMPORTANTÍSSIMO: defina DATABASE_URL completa no Coolify/.env
-      DATABASE_URL: ${DATABASE_URL}
+      # Conecta no Postgres do compose
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
       HOST: ${HOST}
       PORT: ${PORT}
       REDIS_URL: ${REDIS_URL}
-      # SUPABASE_URL: ${SUPABASE_URL}
-      # SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
-      # SUPABASE_SERVICE_ROLE: ${SUPABASE_SERVICE_ROLE}
-      # SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET}
     depends_on:
       db:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
-    # Se quiser expor diretamente (sem proxy do Coolify), descomente:
-    # ports:
-    #   - "8000:8000"
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped
@@ -109,9 +107,9 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
     volumes:
-      - ./observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # ✅ pasta inteira (corrige erro do Coolify)
+      - ./observabilidade/prometheus:/etc/prometheus:ro
       - ./observabilidade/prometheus/data:/prometheus
-    # ports: ["9090:9090"]  # opcional em produção
     restart: unless-stopped
     networks: [monitoring]
 
@@ -119,13 +117,12 @@ services:
     image: grafana/grafana:11.2.0
     container_name: grafana
     env_file:
-      - .env
+      - .env.coolify
     volumes:
       - ./observabilidade/grafana/data:/var/lib/grafana
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
-    # ports: ["3000:3000"]  # opcional em produção
     restart: unless-stopped
     networks: [monitoring]
 
@@ -150,7 +147,7 @@ services:
     image: datadog/agent:7.52.0
     container_name: datadog
     env_file:
-      - .env
+      - .env.coolify
     environment:
       DD_SITE: ${DD_SITE}
       DD_LOGS_ENABLED: ${DD_LOGS_ENABLED}

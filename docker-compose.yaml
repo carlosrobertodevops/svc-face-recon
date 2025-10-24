@@ -1,15 +1,3 @@
-# =============================================================================
-# Arquivo: docker-compose.yaml
-# Versão: v1.0.0
-# Objetivo: Orquestração (Coolify) — INALTERADO
-# Funções/métodos:
-# - Serviço svc-face-recon-db
-# =============================================================================
-
-# docker-compose.yaml — Coolify (produção)
-# Evita ${...} dentro de strings complexas (como URLs).
-# Defina DATABASE_URL completa nas variáveis de ambiente do Coolify.
-
 # docker-compose.yaml — usado pelo Coolify (mesmo conteúdo do docker-compose.coolify.yaml)
 name: svc-face-recon-coolify
 

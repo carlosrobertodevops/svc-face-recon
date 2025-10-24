@@ -1,3 +1,193 @@
+# name: svc-face-recon-local
+
+# services:
+#   # -------------------- DATABASE (pgvector) --------------------
+#   db:
+#     image: pgvector/pgvector:pg16
+#     container_name: svc-face-recon-db
+#     env_file:
+#       - .env.local
+#     environment:
+#       POSTGRES_USER: ${POSTGRES_USER:-postgres}
+#       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Pwdsvcfacerecon}
+#       POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
+#     ports:
+#       - "5432:5432"
+#     volumes:
+#       - ./_data/pg:/var/lib/postgresql/data
+#     healthcheck:
+#       # usar host explícito evita resolução DNS dentro do HC
+#       test:
+#         [
+#           "CMD-SHELL",
+#           "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} || exit 1",
+#         ]
+#       interval: 5s
+#       timeout: 5s
+#       retries: 40
+#       start_period: 60s
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
+#   db-init:
+#     image: postgres:16-alpine
+#     container_name: svc-face-recon-db-init
+#     env_file:
+#       - .env.local
+#     depends_on:
+#       db:
+#         condition: service_healthy
+#     entrypoint: ["/bin/sh", "-c"]
+#     command: |
+#       set -e
+#       echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
+#       export PGPASSWORD="${POSTGRES_PASSWORD:-Pwdsvcfacerecon}"
+#       psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-svc_face_recon}" <<'SQL'
+#       CREATE EXTENSION IF NOT EXISTS vector;
+
+#       CREATE TABLE IF NOT EXISTS member_faces (
+#         member_id text PRIMARY KEY,
+#         embedding vector(512) NOT NULL
+#       );
+
+#       CREATE INDEX IF NOT EXISTS member_faces_hnsw
+#       ON member_faces USING hnsw (embedding vector_l2_ops)
+#       WITH (m = 16, ef_construction = 200);
+#       SQL
+#       echo ">> DDL aplicada com sucesso."
+#     restart: "no"
+#     networks: [monitoring]
+
+#   # -------------------- REDIS (cache) --------------------
+#   redis:
+#     image: redis:7-alpine
+#     container_name: svc-face-recon-redis
+#     command: ["redis-server", "--appendonly", "yes"]
+#     ports:
+#       - "6379:6379"
+#     volumes:
+#       - ./_data/redis:/data
+#     healthcheck:
+#       test: ["CMD", "redis-cli", "ping"]
+#       interval: 10s
+#       timeout: 3s
+#       retries: 20
+#       start_period: 5s
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   # -------------------- APP --------------------
+#   svc-face-recon:
+#     build:
+#       context: .
+#       dockerfile: Dockerfile
+#     platform: linux/amd64
+#     container_name: svc-face-recon
+#     ports:
+#       - "8000:8000"
+#     env_file:
+#       - .env.local
+#     environment:
+#       DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable"
+#       HOST: ${HOST:-0.0.0.0}
+#       PORT: ${PORT:-8000}
+#       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+#     depends_on:
+#       db:
+#         condition: service_healthy
+#       db-init:
+#         condition: service_completed_successfully
+#       redis:
+#         condition: service_healthy
+#     volumes:
+#       - ./.cache/insightface:/root/.insightface
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   # -------------------- OBSERVABILITY (profile: obs) --------------------
+#   prometheus:
+#     image: prom/prometheus:v2.54.1
+#     container_name: prometheus
+#     command:
+#       - "--config.file=/etc/prometheus/prometheus.yml"
+#       - "--storage.tsdb.path=/prometheus"
+#       - "--web.enable-lifecycle"
+#     volumes:
+#       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+#       - ./observability/prometheus/data:/prometheus
+#     ports:
+#       - "9090:9090"
+#     profiles: ["obs"]
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   grafana:
+#     image: grafana/grafana:11.2.0
+#     container_name: grafana
+#     env_file:
+#       - .env.local
+#     volumes:
+#       - ./observability/grafana/data:/var/lib/grafana
+#       - ./observability/grafana/provisioning:/etc/grafana/provisioning
+#     ports:
+#       - "3000:3000"
+#     depends_on:
+#       - prometheus
+#     profiles: ["obs"]
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   node-exporter:
+#     image: prom/node-exporter:v1.8.1
+#     container_name: node-exporter
+#     ports:
+#       - "9100:9100"
+#     profiles: ["obs"]
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   cadvisor:
+#     image: gcr.io/cadvisor/cadvisor:v0.49.1
+#     container_name: cadvisor
+#     ports:
+#       - "8085:8080"
+#     volumes:
+#       - /:/rootfs:ro
+#       - /var/run:/var/run:ro
+#       - /sys:/sys:ro
+#       - /var/lib/docker/:/var/lib/docker:ro
+#     profiles: ["obs"]
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+#   datadog:
+#     image: datadog/agent:7.52.0
+#     container_name: datadog
+#     env_file:
+#       - .env.local
+#     environment:
+#       DD_SITE: ${DD_SITE:-datadoghq.com}
+#       DD_LOGS_ENABLED: ${DD_LOGS_ENABLED:-true}
+#       DD_APM_ENABLED: ${DD_APM_ENABLED:-true}
+#       DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC:-true}
+#       DD_CONTAINER_COLLECT_ALL: ${DD_CONTAINER_COLLECT_ALL:-true}
+#       DD_PROCESS_AGENT_ENABLED: ${DD_PROCESS_AGENT_ENABLED:-true}
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock:ro
+#       - /proc/:/host/proc/:ro
+#       - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+#     ports:
+#       - "8126:8126"
+#       - "8125:8125/udp"
+#     profiles: ["obs"]
+#     restart: unless-stopped
+#     networks: [monitoring]
+
+# networks:
+#   monitoring:
+#     driver: bridge
+
 name: svc-face-recon-local
 
 services:
@@ -8,19 +198,18 @@ services:
     env_file:
       - .env.local
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Pwdsvcfacerecon}
-      POSTGRES_DB: ${POSTGRES_DB:-svc_face_recon}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
     healthcheck:
-      # usar host explícito evita resolução DNS dentro do HC
       test:
         [
           "CMD-SHELL",
-          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-svc_face_recon} || exit 1",
+          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1",
         ]
       interval: 5s
       timeout: 5s
@@ -41,9 +230,9 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: |
       set -e
-      echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
-      export PGPASSWORD="${POSTGRES_PASSWORD:-Pwdsvcfacerecon}"
-      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-svc_face_recon}" <<'SQL'
+      echo ">> Aplicando DDL idempotente no Postgres..."
+      export PGPASSWORD="${POSTGRES_PASSWORD}"
+      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
       CREATE TABLE IF NOT EXISTS member_faces (
@@ -89,10 +278,11 @@ services:
     env_file:
       - .env.local
     environment:
-      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-Pwdsvcfacerecon}@db:5432/${POSTGRES_DB:-svc_face_recon}?sslmode=disable"
-      HOST: ${HOST:-0.0.0.0}
-      PORT: ${PORT:-8000}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Conecta no Postgres do compose
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable"
+      HOST: ${HOST}
+      PORT: ${PORT}
+      REDIS_URL: ${REDIS_URL}
     depends_on:
       db:
         condition: service_healthy
@@ -105,7 +295,7 @@ services:
     restart: unless-stopped
     networks: [monitoring]
 
-  # -------------------- OBSERVABILITY (profile: obs) --------------------
+  # -------------------- OBSERVABILITY (habilite com: --profile obs) --------------------
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: prometheus
@@ -114,8 +304,9 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
     volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./observability/prometheus/data:/prometheus
+      # ✅ monta a pasta inteira (corrige "not a directory")
+      - ./observabilidade/prometheus:/etc/prometheus:ro
+      - ./observabilidade/prometheus/data:/prometheus
     ports:
       - "9090:9090"
     profiles: ["obs"]
@@ -128,8 +319,8 @@ services:
     env_file:
       - .env.local
     volumes:
-      - ./observability/grafana/data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - ./observabilidade/grafana/data:/var/lib/grafana
+      - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
     ports:
       - "3000:3000"
     depends_on:
@@ -167,12 +358,13 @@ services:
     env_file:
       - .env.local
     environment:
-      DD_SITE: ${DD_SITE:-datadoghq.com}
-      DD_LOGS_ENABLED: ${DD_LOGS_ENABLED:-true}
-      DD_APM_ENABLED: ${DD_APM_ENABLED:-true}
-      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC:-true}
-      DD_CONTAINER_COLLECT_ALL: ${DD_CONTAINER_COLLECT_ALL:-true}
-      DD_PROCESS_AGENT_ENABLED: ${DD_PROCESS_AGENT_ENABLED:-true}
+      DD_SITE: ${DD_SITE}
+      DD_LOGS_ENABLED: ${DD_LOGS_ENABLED}
+      DD_APM_ENABLED: ${DD_APM_ENABLED}
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: ${DD_DOGSTATSD_NON_LOCAL_TRAFFIC}
+      DD_CONTAINER_COLLECT_ALL: ${DD_CONTAINER_COLLECT_ALL}
+      DD_PROCESS_AGENT_ENABLED: ${DD_PROCESS_AGENT_ENABLED}
+      DD_API_KEY: ${DD_API_KEY}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc/:/host/proc/:ro

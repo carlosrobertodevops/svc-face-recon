@@ -1,5 +1,5 @@
 # svc-face-recon/Dockerfile
-FROM python:3.11-slim
+FROM python:3.11
 
 ENV SERVICE_NAME=svc-face-recon
 # cache de modelos no volume

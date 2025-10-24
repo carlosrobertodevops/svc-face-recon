@@ -1,51 +1,40 @@
-# syntax=docker/dockerfile:1.6
-# svc-face-recon/Dockerfile.prod — Coolify safe (somente wheels)
-
+# svc-face-recon/Dockerfile
 FROM python:3.11-slim
 
-ENV SERVICE_NAME=svc-face-recon \
-    INSIGHTFACE_HOME=/tmp/insightface \
-    HF_HOME=/tmp/insightface \
-    ORT_DISABLE_CUDA=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=120 \
-    PIP_RETRIES=5 \
-    PIP_INDEX_URL=https://pypi.org/simple \
-    PYTHONUNBUFFERED=1
+ENV SERVICE_NAME=svc-face-recon
+# cache de modelos no volume
+ENV INSIGHTFACE_HOME=/models
+ENV HF_HOME=/models
+
+# Dependências nativas (Debian 13/Trixie → libgl1)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Pacotes pesados antes, apenas wheels (evita build nativo)
-RUN pip install --only-binary=:all: --prefer-binary \
-      numpy==2.1.2 \
-      pillow==10.4.0 \
-      onnxruntime==1.19.2 \
-      opencv-python-headless==4.10.0.84 \
-      scipy==1.13.1 \
-      scikit-image==0.24.0
+# Garante diretório de cache e um symlink fallback para ~/.insightface
+RUN mkdir -p /models && \
+  if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
 
-# Demais dependências do projeto (também forçando wheels)
 COPY requirements.txt .
-RUN pip install --only-binary=:all: --prefer-binary -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Pré-download de modelos (não falha o build se der erro)
+# depois de instalar requirements
 RUN python - <<'PY'
-import os, sys
-os.environ["INSIGHTFACE_HOME"]="/tmp/insightface"
+import os
+os.environ["INSIGHTFACE_HOME"]="/models"
 os.environ["ORT_DISABLE_CUDA"]="1"
-try:
-    from insightface.app import FaceAnalysis
-    app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
-    app.prepare(ctx_id=-1, det_size=(640,640))
-    print("Modelos prontos em", os.environ["INSIGHTFACE_HOME"])
-except Exception as e:
-    print("WARN: pre-download ignorado:", e, file=sys.stderr)
+from insightface.app import FaceAnalysis
+app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
+app.prepare(ctx_id=-1, det_size=(640,640))
+print("Modelos baixados para:", os.environ["INSIGHTFACE_HOME"])
 PY
 
-# Código
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
-CMD ["uvicorn","app.main:app","--host","0.0.0.0","--port","8000"]
+ENV UVICORN_WORKERS=1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

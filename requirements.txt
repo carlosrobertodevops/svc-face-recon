@@ -17,4 +17,4 @@ redis>=5.0.4
 opencv-python-headless==4.10.0.84
 scipy==1.13.1
 scikit-image==0.24.0
-insightface>=2
+insightface@ git+https://github.com/deepinsight/insightface.git

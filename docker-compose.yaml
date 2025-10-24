@@ -1,4 +1,10 @@
-name: svc-face-recon
+# =============================================================================
+# Arquivo: docker-compose.yaml
+# Versão: v1.0.0
+# Objetivo: Orquestração (Coolify) — INALTERADO
+# Funções/métodos:
+# - Serviço svc-face-recon-db
+# =============================================================================
 
 services:
   # -------------------- DATABASE (pgvector) --------------------

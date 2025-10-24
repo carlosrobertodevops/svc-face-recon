@@ -31,7 +31,7 @@ RUN cat requirements.txt | while read package; do \
     done
 
 COPY app ./app
-COPY .env.example ./.env
+COPY .env ./.env
 
 EXPOSE 8000
 ENV UVICORN_WORKERS=1

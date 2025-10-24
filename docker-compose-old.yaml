@@ -1,7 +1,9 @@
-# docker-compose.yaml — usado pelo Coolify (mesmo conteúdo do docker-compose.coolify.yaml)
-name: svc-face-recon-coolify
+# docker-compose.yaml — Coolify (produção)
+# Evita ${...} dentro de strings complexas (como URLs).
+# Defina DATABASE_URL completa nas variáveis de ambiente do Coolify.
 
 services:
+  # -------------------- DATABASE (pgvector) --------------------
   db:
     image: pgvector/pgvector:pg16
     container_name: svc-face-recon-db
@@ -13,32 +15,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 40
-      start_period: 90s
-    restart: unless-stopped
-    networks: [monitoring]
-
-  db-init:
-    image: postgres:16-alpine
-    container_name: svc-face-recon-db-init
-    env_file:
-      - .env
-    depends_on:
-      db:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/bin/bash", "-c"]
     command: |
       set -e
-      export PGPASSWORD="${POSTGRES_PASSWORD}"
-      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
+      mkdir -p /docker-entrypoint-initdb.d
+      cat > /docker-entrypoint-initdb.d/01_init.sql <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
       CREATE TABLE IF NOT EXISTS member_faces (
@@ -50,9 +31,21 @@ services:
       ON member_faces USING hnsw (embedding vector_l2_ops)
       WITH (m = 16, ef_construction = 200);
       SQL
-    restart: "no"
+      exec docker-entrypoint.sh postgres
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB} -h 127.0.0.1 || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 90s
+    restart: unless-stopped
     networks: [monitoring]
 
+  # -------------------- REDIS (cache) --------------------
   redis:
     image: redis:7-alpine
     container_name: svc-face-recon-redis
@@ -68,6 +61,7 @@ services:
     restart: unless-stopped
     networks: [monitoring]
 
+  # -------------------- APP --------------------
   svc-face-recon:
     build:
       context: .
@@ -76,22 +70,29 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      # <- IMPORTANTÍSSIMO: defina DATABASE_URL completa no Coolify/.env
+      DATABASE_URL: ${DATABASE_URL}
       HOST: ${HOST}
       PORT: ${PORT}
       REDIS_URL: ${REDIS_URL}
+      # SUPABASE_URL: ${SUPABASE_URL}
+      # SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      # SUPABASE_SERVICE_ROLE: ${SUPABASE_SERVICE_ROLE}
+      # SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET}
     depends_on:
       db:
         condition: service_healthy
-      db-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
+    # Se quiser expor diretamente (sem proxy do Coolify), descomente:
+    # ports:
+    #   - "8000:8000"
     volumes:
       - ./.cache/insightface:/root/.insightface
     restart: unless-stopped
     networks: [monitoring]
 
+  # -------------------- OBSERVABILITY --------------------
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: prometheus
@@ -100,8 +101,9 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
     volumes:
-      - ./observabilidade/prometheus:/etc/prometheus:ro
+      - ./observabilidade/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observabilidade/prometheus/data:/prometheus
+    # ports: ["9090:9090"]  # opcional em produção
     restart: unless-stopped
     networks: [monitoring]
 
@@ -115,6 +117,7 @@ services:
       - ./observabilidade/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - prometheus
+    # ports: ["3000:3000"]  # opcional em produção
     restart: unless-stopped
     networks: [monitoring]
 

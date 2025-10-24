@@ -79,6 +79,11 @@ services:
 
   # -------------------- APP --------------------
   svc-face-recon:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    # ... resto igual
     build:
       context: .
       dockerfile: Dockerfile.prod

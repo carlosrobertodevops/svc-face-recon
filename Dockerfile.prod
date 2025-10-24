@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1.6
-# Produção (Coolify) — sem apt-get e sem symlink
+# Dockerfile.prod — build estável (sem apt-get e sem criar nada em /root)
 
-FROM --platform=linux/amd64 python:3.11-slim
+FROM python:3.11
 
+# Configurações em runtime e locais de cache 100% graváveis
 ENV SERVICE_NAME=svc-face-recon \
     ENVIRONMENT=production \
-    # use o diretório padrão do insightface diretamente (nada de symlink)
-    INSIGHTFACE_HOME=/root/.insightface \
-    HF_HOME=/models \
+    INSIGHTFACE_HOME=/app/.insightface \
+    HF_HOME=/app/.models \
     ORT_DISABLE_CUDA=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -18,28 +18,34 @@ ENV SERVICE_NAME=svc-face-recon \
 
 WORKDIR /app
 
-# Cria os diretórios de cache (sem symlink!)
-RUN mkdir -p /root/.insightface /models
+# Cria diretórios de cache DENTRO do /app (evita /root e problemas no builder)
+RUN mkdir -p /app/.insightface /app/.models
 
-# Somente wheels Python (evita erros de apt-get no builder do Coolify)
+# Dependências Python via wheels (evita apt-get no Coolify)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Pré-download dos modelos (CPU)
+# Pré-download dos modelos do insightface (CPU). Se não conseguir, NÃO falha o build.
 RUN python - <<'PY'
 import os
-os.environ["INSIGHTFACE_HOME"]=os.environ.get("INSIGHTFACE_HOME","/root/.insightface")
-os.environ["ORT_DISABLE_CUDA"]="1"
-from insightface.app import FaceAnalysis
-app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
-app.prepare(ctx_id=-1, det_size=(640,640))
-print("Modelos em:", os.environ["INSIGHTFACE_HOME"])
+os.environ.setdefault("INSIGHTFACE_HOME", "/app/.insightface")
+os.environ["ORT_DISABLE_CUDA"] = "1"
+try:
+    from insightface.app import FaceAnalysis
+    app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
+    app.prepare(ctx_id=-1, det_size=(640,640))
+    print("✔ Modelos prontos em:", os.environ["INSIGHTFACE_HOME"])
+except Exception as e:
+    # Em alguns builders sem rede/SSL, pode falhar — seguimos em frente.
+    print("[WARN] Pré-download opcional falhou:", e)
 PY
 
-# Código
+# Código da aplicação
 COPY app ./app
 COPY .env.example ./.env
 
 EXPOSE 8000
+
+# Uvicorn direto (sem scripts externos)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

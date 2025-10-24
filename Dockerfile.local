@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.6
+# svc-face-recon/Dockerfile.local — desenvolvimento local (Docker Desktop)
+
+FROM python:3.11-slim
+
+# Identidade e ambiente local
+ENV SERVICE_NAME=svc-face-recon
+ENV ENVIRONMENT=local
+
+# Cache de modelos (InsightFace / ONNXRuntime)
+ENV INSIGHTFACE_HOME=/models
+ENV HF_HOME=/models
+ENV ORT_DISABLE_CUDA=1
+
+# Configurações padrão de desempenho e logs
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PIP_NO_CACHE_DIR=1
+ENV UVICORN_WORKERS=1
+
+WORKDIR /app
+
+# Dependências do sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 libstdc++6 libgomp1 build-essential curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Diretório de cache e symlink InsightFace
+RUN mkdir -p /models && \
+    if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
+
+# Instala dependências Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Pré-carrega modelos InsightFace (CPU only)
+RUN python - <<'PY'
+import os
+os.environ["INSIGHTFACE_HOME"]="/models"
+os.environ["ORT_DISABLE_CUDA"]="1"
+from insightface.app import FaceAnalysis
+app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection","recognition"])
+app.prepare(ctx_id=-1, det_size=(640,640))
+print("Modelos baixados para:", os.environ["INSIGHTFACE_HOME"])
+PY
+
+# Código da aplicação
+COPY app ./app
+COPY .env.local ./.env
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -81,7 +81,7 @@ services:
   svc-face-recon:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.local
     platform: linux/amd64
     container_name: svc-face-recon
     ports:

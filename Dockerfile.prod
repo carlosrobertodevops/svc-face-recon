@@ -14,8 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Cria diretório de modelos
-RUN mkdir -p /models
+# Garante diretório de cache e um symlink fallback para ~/.insightface
+RUN mkdir -p /models && \
+  if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
 
 # Copia requirements
 COPY requirements.txt .

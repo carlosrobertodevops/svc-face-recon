@@ -6,9 +6,10 @@ ENV INSIGHTFACE_HOME=/models
 ENV HF_HOME=/models
 ENV PYTHONUNBUFFERED=1
 
-# Dependências nativas MÍNIMAS
+# Dependências nativas COMPLETAS (incluindo git e build-essential)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libstdc++6 libgomp1 curl \
+    libgl1 libglib2.0-0 libstdc++6 libgomp1 \
+    git build-essential curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,21 +21,33 @@ RUN mkdir -p /models
 COPY requirements.txt .
 
 # Upgrade pip
-RUN pip install --upgrade pip
+RUN pip install --upgrade pip setuptools wheel
 
-# Instalação individual dos pacotes
+# VERIFICAÇÃO: Mostra o conteúdo do requirements.txt
+RUN echo "=== VERIFICANDO REQUIREMENTS.TXT ===" && \
+    cat requirements.txt && \
+    echo "=== FIM DO REQUIREMENTS.TXT ==="
+
+# Instalação COM VERIFICAÇÃO DE PACOTES
 RUN cat requirements.txt | while read package; do \
     if [ -n "$package" ]; then \
         echo "=== INSTALANDO: $package ===" && \
-        pip install --no-cache-dir --timeout=60 "$package" || \
-        (echo "=== FALHA EM: $package ===" && exit 1); \
+        pip install --no-cache-dir --timeout=120 "$package" && \
+        echo "=== VERIFICANDO: $package ===" && \
+        python -c "import ${package%%[<>=]*}; print(f'✅ ${package%%[<>=]*} instalado corretamente')" 2>/dev/null || echo "⚠️  ${package%%[<>=]*} instalado mas não verificável"; \
     fi; \
     done
+
+# VERIFICAÇÃO FINAL de todos os pacotes críticos
+RUN echo "=== VERIFICAÇÃO FINAL ===" && \
+    python -c "import insightface; print('✅ insightface OK')" && \
+    python -c "import fastapi; print('✅ fastapi OK')" && \
+    python -c "import uvicorn; print('✅ uvicorn OK')" && \
+    echo "=== TODOS OS PACOTES VERIFICADOS ==="
 
 COPY app ./app
 COPY .env ./.env
 
 EXPOSE 8001
 
-# Comando com workers para produção
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

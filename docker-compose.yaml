@@ -1,4 +1,4 @@
-# name: svc-face-recon-local
+name: svc-face-recon-local
 
 services:
   # -------------------- DATABASE (pgvector) --------------------
@@ -16,19 +16,14 @@ services:
     volumes:
       - ./_data/pg:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB} || exit 1",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
-      retries: 40
-      start_period: 60s
+      retries: 10
     restart: unless-stopped
     networks: [monitoring]
 
-  # --- APLICA EXTENSÃO/TABELAS/ÍNDICES (idempotente) ---
+  # --- APLICA EXTENSÃO/TABELAS/ÍNDICES ---
   db-init:
     image: postgres:16-alpine
     container_name: svc-face-recon-db-init
@@ -37,12 +32,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
     command: |
+      /bin/sh -c "
       set -e
-      echo ">> Aguardando DB pronto e aplicando DDL idempotente..."
-      export PGPASSWORD="${POSTGRES_PASSWORD:-Pwdsvcfacerecon}"
-      psql -v ON_ERROR_STOP=1 -h db -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" <<'SQL'
+      echo '>> Aguardando DB pronto...'
+      sleep 10
+      export PGPASSWORD='${POSTGRES_PASSWORD}'
+      psql -v ON_ERROR_STOP=1 -h db -U '${POSTGRES_USER}' -d '${POSTGRES_DB}' <<'SQL'
       CREATE EXTENSION IF NOT EXISTS vector;
 
       CREATE TABLE IF NOT EXISTS member_faces (
@@ -54,7 +50,8 @@ services:
       ON member_faces USING hnsw (embedding vector_l2_ops)
       WITH (m = 16, ef_construction = 200);
       SQL
-      echo ">> DDL aplicada com sucesso."
+      echo '>> DDL aplicada com sucesso.'
+      "
     restart: "no"
     networks: [monitoring]
 
@@ -71,8 +68,7 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
-      retries: 20
-      start_period: 5s
+      retries: 5
     restart: unless-stopped
     networks: [monitoring]
 
@@ -87,31 +83,32 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?sslmode=disable"
-      HOST: ${HOST}
-      PORT: ${PORT}
-      REDIS_URL: ${REDIS_URL}
-      SUPABASE_URL: ${SUPABASE_URL}
-      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
-      SUPABASE_STORAGE_BUCKET: ${SUPABASE_STORAGE_BUCKET}
-      FACE_RECOGNITION_THRESHOLD: ${FACE_RECOGNITION_THRESHOLD}
-      MAX_FACES_PER_IMAGE: ${MAX_FACES_PER_IMAGE}
-      MEMBERS_TABLE: ${MEMBERS_TABLE}
-      MEMBERS_ID_COLUMN: ${MEMBERS_ID_COLUMN}
-      MEMBERS_NAME_COLUMN: ${MEMBERS_NAME_COLUMN}
-      MEMBERS_PHOTOS_COLUMN: ${MEMBERS_PHOTOS_COLUMN}
+      # Garante todas as variáveis necessárias
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      REDIS_URL: "redis://redis:6379/0"
+      INSIGHTFACE_HOME: "/models"
+      HF_HOME: "/models"
     depends_on:
       db:
         condition: service_healthy
-      db-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
     volumes:
-      - ./.cache/insightface:/root/.insightface
+      - insightface_models:/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
     networks: [monitoring]
 
 networks:
   monitoring:
     driver: bridge
+
+volumes:
+  insightface_models:

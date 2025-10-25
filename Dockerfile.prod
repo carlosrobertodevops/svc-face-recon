@@ -4,17 +4,17 @@ FROM python:3.11-slim
 ENV SERVICE_NAME=svc-face-recon
 ENV INSIGHTFACE_HOME=/models
 ENV HF_HOME=/models
+ENV PYTHONUNBUFFERED=1
 
 # Dependências nativas MÍNIMAS
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1 libglib2.0-0 libstdc++6 libgomp1 \
+    libgl1 libglib2.0-0 libstdc++6 libgomp1 curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Garante diretório de cache e um symlink fallback para ~/.insightface
-RUN mkdir -p /models && \
-  if [ ! -e /root/.insightface ]; then ln -s /models /root/.insightface; fi
+# Cria diretório de modelos
+RUN mkdir -p /models
 
 # Copia requirements
 COPY requirements.txt .
@@ -35,6 +35,6 @@ COPY app ./app
 COPY .env ./.env
 
 EXPOSE 8001
-ENV UVICORN_WORKERS=1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# Comando com workers para produção
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

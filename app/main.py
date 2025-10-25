@@ -181,7 +181,7 @@ def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
 
 class IndexResponse(BaseModel):
     ok: bool
-    result: Optional[Dict[str, any]] = None
+    result: Optional[Dict[str, int]] = None
     error: Optional[str] = None
 
 

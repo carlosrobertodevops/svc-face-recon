@@ -308,11 +308,20 @@ async def ops_status():
 async def index_all():
     try:
         result = await build_index_from_members()
-        # CORREÇÃO: Garantir que o resultado seja um dict válido
+
+        # CORREÇÃO: Garante que o resultado seja um dict válido
         if isinstance(result, dict):
+            # Se já for um dict, usa como está
             return IndexResponse(ok=True, result=result)
+        elif isinstance(result, (int, str)):
+            # Se for um número ou string, converte para dict
+            return IndexResponse(ok=True, result={"count": result})
         else:
-            return IndexResponse(ok=True, result={"message": "Indexação concluída"})
+            # Para qualquer outro tipo, cria um dict padrão
+            return IndexResponse(
+                ok=True, result={"message": "Indexação concluída", "status": "success"}
+            )
+
     except Exception as e:
         return IndexResponse(ok=False, error=str(e))
 

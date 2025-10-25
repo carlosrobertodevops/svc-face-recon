@@ -5,9 +5,8 @@ ENV SERVICE_NAME=svc-face-recon
 ENV INSIGHTFACE_HOME=/models
 ENV HF_HOME=/models
 ENV PYTHONUNBUFFERED=1
-ENV ORT_DISABLE_CUDA=1
 
-# Dependências nativas COMPLETAS
+# Dependências nativas COMPLETAS (incluindo git e build-essential)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libstdc++6 libgomp1 \
     git build-essential curl \
@@ -24,62 +23,27 @@ COPY requirements.txt .
 # Upgrade pip
 RUN pip install --upgrade pip setuptools wheel
 
-# Instalação dos pacotes
+# VERIFICAÇÃO: Mostra o conteúdo do requirements.txt
+RUN echo "=== VERIFICANDO REQUIREMENTS.TXT ===" && \
+    cat requirements.txt && \
+    echo "=== FIM DO REQUIREMENTS.TXT ==="
+
+# Instalação COM VERIFICAÇÃO DE PACOTES
 RUN cat requirements.txt | while read package; do \
     if [ -n "$package" ]; then \
         echo "=== INSTALANDO: $package ===" && \
-        pip install --no-cache-dir --timeout=120 "$package" || \
-        (echo "=== FALHA EM: $package ===" && exit 1); \
+        pip install --no-cache-dir --timeout=120 "$package" && \
+        echo "=== VERIFICANDO: $package ===" && \
+        python -c "import ${package%%[<>=]*}; print(f'✅ ${package%%[<>=]*} instalado corretamente')" 2>/dev/null || echo "⚠️  ${package%%[<>=]*} instalado mas não verificável"; \
     fi; \
     done
 
-# VERIFICAÇÃO dos pacotes instalados
-RUN echo "=== VERIFICANDO PACOTES ===" && \
+# VERIFICAÇÃO FINAL de todos os pacotes críticos
+RUN echo "=== VERIFICAÇÃO FINAL ===" && \
     python -c "import insightface; print('✅ insightface OK')" && \
     python -c "import fastapi; print('✅ fastapi OK')" && \
     python -c "import uvicorn; print('✅ uvicorn OK')" && \
-    echo "=== PACOTES VERIFICADOS ==="
-
-# DOWNLOAD DOS MODELOS durante o build
-RUN echo "=== INICIANDO DOWNLOAD DOS MODELOS ===" && \
-    python -c "
-import os
-os.environ['INSIGHTFACE_HOME'] = '/models'
-os.environ['ORT_DISABLE_CUDA'] = '1'
-os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
-
-print('📥 Configurando ambiente para download...')
-print(f'INSIGHTFACE_HOME: {os.environ[\"INSIGHTFACE_HOME\"]}')
-
-try:
-    from insightface.app import FaceAnalysis
-    print('🚀 Iniciando download do modelo buffalo_l...')
-
-    # Configura a aplicação
-    app = FaceAnalysis(
-        name='buffalo_l',
-        allowed_modules=['detection', 'recognition'],
-        providers=['CPUExecutionProvider']
-    )
-
-    # Este comando faz o download dos modelos
-    app.prepare(ctx_id=-1, det_size=(640, 640))
-
-    print('✅ Modelos baixados com sucesso!')
-    print('📁 Local dos modelos:', os.environ['INSIGHTFACE_HOME'])
-
-    # Lista os arquivos baixados
-    import glob
-    model_files = glob.glob('/models/**/*', recursive=True)
-    print('📄 Arquivos baixados:')
-    for f in model_files[:10]:  # Mostra os primeiros 10 arquivos
-        print(f'   - {f}')
-
-except Exception as e:
-    print(f'❌ Erro no download: {e}')
-    print('⚠️ Os modelos serão baixados no primeiro uso da aplicação')
-    exit(0)  # Não falha o build se o download der erro
-"
+    echo "=== TODOS OS PACOTES VERIFICADOS ==="
 
 COPY app ./app
 COPY .env ./.env

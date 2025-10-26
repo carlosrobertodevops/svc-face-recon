@@ -594,7 +594,7 @@ async def identity_file(
 
 
 @app.post("/verify/file", tags=["face"])
-async def verify_file(
+async def verif y_file(
     member_id: str = Form(...),
     image: UploadFile = File(...),
 ):

@@ -30,11 +30,6 @@ from .face_engine import face_engine
 
 
 def _normalize_supabase_relpath(p: str) -> str:
-    """
-    Normaliza um caminho do Storage para o formato relativo do bucket:
-    - remove barras iniciais
-    - aceita prefixo 'uploads/' e remove
-    """
     p = (p or "").strip().lstrip("/")
     if not p:
         return p
@@ -48,11 +43,6 @@ _DRIVE_ID_QUERY = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
 
 
 def _to_google_drive_download(url: str) -> str:
-    """
-    Converte links 'view' do Google Drive em links de download direto.
-    - https://drive.google.com/file/d/FILE_ID/view?usp=sharing  ->  uc?export=download&id=FILE_ID
-    - https://drive.google.com/open?id=FILE_ID                 ->  uc?export=download&id=FILE_ID
-    """
     if "drive.google.com" not in url:
         return url
     file_id = None
@@ -80,13 +70,6 @@ async def _fetch_image_bytes(
     image_url: Optional[str] = None,
     image_b64: Optional[str] = None,
 ) -> bytes:
-    """
-    Padroniza todas as entradas de imagem.
-    Prioridade:
-      1) supabase_path (aceita caminho relativo, URL pública do Supabase, com/sem 'uploads/')
-      2) image_url (se for Supabase público -> usa Storage; se for Drive 'view' -> converte p/ download)
-      3) image_b64
-    """
     # 1) SUPABASE_PATH
     if supabase_path:
         val = supabase_path.strip()
@@ -176,10 +159,6 @@ def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
 
 
 def _public_url_from_storage_path(relpath: str) -> Optional[str]:
-    """
-    Constrói a URL pública para um objeto do Storage a partir do caminho relativo.
-    Compatível com supabase-py v2 (retorna dict com data.publicUrl).
-    """
     try:
         sb = get_supabase()
         res = sb.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(relpath)
@@ -197,13 +176,17 @@ def _public_url_from_storage_path(relpath: str) -> Optional[str]:
 
 def _member_photo_public_url(member_id: str) -> Optional[str]:
     """
-    Resolve a foto pública do membro:
-      1) Se MEMBERS_PHOTO_COLUMN estiver definida, usa o valor (URL completa ou caminho no Storage).
-      2) Fallbacks: {member_id}.jpg/.jpeg/.png/.webp (com/sem prefixo uploads/).
+    Resolve a foto pública do membro.
+    Prioridade:
+      1) Coluna definida em .env (MEMBERS_PHOTOS_COLUMN ou MEMBERS_PHOTO_COLUMN)
+      2) Fallbacks por convenção {member_id}.jpg|jpeg|png|webp (com/sem uploads/)
     """
-    col = getattr(settings, "MEMBERS_PHOTO_COLUMN", None)
+    # aceita as duas variações para compatibilidade
+    col = getattr(settings, "MEMBERS_PHOTOS_COLUMN", None) or getattr(
+        settings, "MEMBERS_PHOTO_COLUMN", None
+    )
 
-    # 1) Coluna na tabela
+    # 1) tabela/coluna
     if col:
         try:
             sb = get_supabase()
@@ -225,7 +208,7 @@ def _member_photo_public_url(member_id: str) -> Optional[str]:
         except Exception:
             pass
 
-    # 2) Fallback por convenção
+    # 2) fallbacks
     candidates = [
         f"{member_id}.jpg",
         f"{member_id}.jpeg",
@@ -245,9 +228,6 @@ def _member_photo_public_url(member_id: str) -> Optional[str]:
 
 
 def _make_preview_b64(img_bytes: bytes, max_side: int = 256) -> str:
-    """
-    Gera uma miniatura JPEG em base64 (sem prefixo data:) a partir de bytes de imagem.
-    """
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     im.thumbnail((max_side, max_side))
     buf = io.BytesIO()
@@ -256,15 +236,11 @@ def _make_preview_b64(img_bytes: bytes, max_side: int = 256) -> str:
 
 
 def _make_preview_data_url(img_bytes: bytes, max_side: int = 256) -> str:
-    """
-    Gera uma miniatura em formato data URL (data:image/jpeg;base64,...).
-    Útil para exibir direto no <img> do frontend.
-    """
     return "data:image/jpeg;base64," + _make_preview_b64(img_bytes, max_side=max_side)
 
 
 # -----------------------------------------------------------------------------
-# Schemas (JSON) - CORRIGIDOS + CAMPOS NOVOS
+# Schemas (JSON) + novos campos de imagem
 # -----------------------------------------------------------------------------
 
 
@@ -464,19 +440,21 @@ async def identity(req: IdentityRequest):
         emb = await _extract_single_embedding(b)
         if emb is None:
             return IdentityResponse(ok=False, threshold=thr, candidates=[])
+
         cands: List[Tuple[str, float]] = []
         for mid, ref in mem_index.embeddings.items():
             d = _distance(emb, ref.tolist())
             cands.append((mid, d))
         cands.sort(key=lambda x: x[1])
         top = cands[: max(1, req.top_k)]
+
         out: List[IdentityCandidate] = [
             IdentityCandidate(
                 member_id=mid,
                 distance=dist,
                 matched=dist <= thr,
                 name=_fetch_member_name_from_supabase(mid),
-                photo_url=_member_photo_public_url(mid),  # NOVO
+                photo_url=_member_photo_public_url(mid),
             )
             for mid, dist in top
         ]
@@ -512,7 +490,7 @@ async def verify(req: VerifyRequest):
             "distance": dist,
             "threshold": thr,
             "matched": dist <= thr,
-            "photo_url": _member_photo_public_url(req.member_id),  # NOVO
+            "photo_url": _member_photo_public_url(req.member_id),
         }
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -548,8 +526,8 @@ async def compare(req: CompareRequest):
             distance=dist,
             threshold=thr,
             is_same=(dist <= thr),
-            a_preview_b64=_make_preview_data_url(a_bytes),  # NOVO
-            b_preview_b64=_make_preview_data_url(b_bytes),  # NOVO
+            a_preview_b64=_make_preview_data_url(a_bytes),
+            b_preview_b64=_make_preview_data_url(b_bytes),
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -560,7 +538,7 @@ async def compare(req: CompareRequest):
 
 
 # -----------------------------------------------------------------------------
-# FACE — MULTIPART/FILE (para escolher arquivo no Swagger)
+# FACE — MULTIPART/FILE (Swagger)
 # -----------------------------------------------------------------------------
 
 
@@ -606,7 +584,7 @@ async def identity_file(
                 distance=dist,
                 matched=dist <= thr,
                 name=_fetch_member_name_from_supabase(mid),
-                photo_url=_member_photo_public_url(mid),  # NOVO
+                photo_url=_member_photo_public_url(mid),
             )
             for mid, dist in top
         ]
@@ -639,12 +617,12 @@ async def verify_file(
             "distance": dist,
             "threshold": thr,
             "matched": dist <= thr,
-            "photo_url": _member_photo_public_url(member_id),  # NOVO
+            "photo_url": _member_photo_public_url(member_id),
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/compare/files", response_model=CompareResponse, tags=["face"])
@@ -668,8 +646,8 @@ async def compare_files(
             distance=dist,
             threshold=thr,
             is_same=(dist <= thr),
-            a_preview_b64=_make_preview_data_url(a_bytes),  # NOVO
-            b_preview_b64=_make_preview_data_url(b_bytes),  # NOVO
+            a_preview_b64=_make_preview_data_url(a_bytes),
+            b_preview_b64=_make_preview_data_url(b_bytes),
         )
     except HTTPException:
         raise
@@ -684,7 +662,6 @@ async def compare_files(
 
 @app.on_event("startup")
 async def on_startup():
-    # pequeno atraso para cenários locais e para DB/Redis subirem
     await asyncio.sleep(1.5)
     try:
         mem_index.rebuild()

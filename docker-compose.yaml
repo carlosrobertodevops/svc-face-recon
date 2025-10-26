@@ -1,4 +1,10 @@
-name: svc-face-recon-local
+# =============================================================================
+# Arquivo: docker-compose.yaml
+# Versão: v1.10.26
+# Objetivo: Reconhecimento facial
+# Funções/métodos:
+# - Serviço redis e svc-kg com healthcheck /live
+# =============================================================================
 
 services:
   # -------------------- DATABASE (pgvector) --------------------
@@ -21,7 +27,8 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: [obs_net]
+    networks:
+      - obs_net
 
   # --- APLICA EXTENSÃO/TABELAS/ÍNDICES ---
   db-init:
@@ -53,7 +60,8 @@ services:
       echo '>> DDL aplicada com sucesso.'
       "
     restart: "no"
-    networks: [obs_net]
+    networks:
+      - obs_net
 
   # -------------------- REDIS (cache) --------------------
   redis:
@@ -70,7 +78,8 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
-    networks: [obs_net]
+    networks:
+      - obs_net
 
   # -------------------- APP --------------------
   svc-face-recon:
@@ -104,7 +113,8 @@ services:
       retries: 3
       start_period: 40s
     restart: unless-stopped
-    networks: [obs_net]
+    networks:
+      - obs_net
 
 networks:
   obs_net:

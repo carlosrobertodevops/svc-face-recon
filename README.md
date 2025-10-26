@@ -180,11 +180,66 @@ https://api.mondaha.com/face/   ← proxy público (exemplo)
 
 ---
 
-Posso agora gerar o **README.md completo** para o repositório `svc-face-recon`, com:
+svc-face-recon — microserviço de reconhecimento facial (FastAPI + InsightFace + pgvector)
 
-* introdução técnica
-* instruções de build
-* documentação de endpoints (OpenAPI + exemplos cURL e FlutterFlow)
-* guia de integração FlutterFlow (passo a passo com capturas e actions)
 
-Quer que eu gere esse `README.md` pronto agora?
+Exemplos de uso (curl)
+
+1) Enroll (via URL)
+```bash
+curl -X POST http://localhost:8000/enroll \
+  -H "Content-Type: application/json" \
+  -d '{
+    "member_id": "123",
+    "image_url": "https://drive.google.com/file/d/<FILE_ID>/view?usp=sharing"
+  }'
+```
+2) Enroll (via Supabase Storage)
+```bash
+curl -X POST http://localhost:8000/enroll \
+  -H "Content-Type: application/json" \
+  -d '{
+    "member_id": "123",
+    "supabase_path": "membros/123.jpg"
+  }'
+```
+3) Identify (top-3)
+```bash
+curl -X POST http://localhost:8000/identify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "image_url": "https://meu-site/img.jpg",
+    "top_k": 3
+  }'
+```
+```bash
+curl -X POST http://localhost:8000/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "member_id": "123",
+    "image_url": "https://meu-site/img.jpg"
+  }'
+```
+5) Compare
+```bash
+curl -X POST http://localhost:8000/compare \
+  -H "Content-Type: application/json" \
+  -d '{
+    "a_image_url": "https://meu-site/a.jpg",
+    "b_image_url": "https://meu-site/b.jpg"
+  }'
+```
+6) Enroll (arquivo local)
+```bash
+curl -X POST http://localhost:8000/enroll/file \
+  -F "member_id=123" \
+  -F "image=@/caminho/para/foto.jpg"
+
+```
+⸻
+
+Créditos
+	•	InsightFace pela qualidade dos modelos.
+	•	pgvector pela simplicidade no armazenamento/vetorial.
+	•	Supabase pelo Storage + PostgREST.
+	•	FastAPI pela DX excelente.

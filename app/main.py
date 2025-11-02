@@ -34,7 +34,7 @@ from .utils import (
 )
 from .face_engine import face_engine
 
-# >>> docs custom
+# Cabeçalho/Swagger custom
 from .docs import mount_docs_routes
 
 # -----------------------------------------------------------------------------
@@ -198,13 +198,14 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
     Converte o valor cru de `fotos_path` (ou equivalente) em uma URL pública:
     - aceita URL direta
     - aceita caminho do Storage (com/sem 'uploads/')
-    - aceita string com colchetes/aspas
-    - tenta parsear JSON e pegar o primeiro caminho/URL
+    - aceita string com colchetes/aspas (ex.: "['uploads/.../123.png']")
+    - tenta fazer parse de JSON (lista/dict) e pega o primeiro caminho/URL
     - aceita lista/tupla/dict Python
     """
     if raw is None:
         return None
 
+    # lista/tupla -> pega primeiro não-vazio
     if isinstance(raw, (list, tuple)):
         for it in raw:
             url = _coerce_photo_value_to_public_url(it)
@@ -212,16 +213,19 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
                 return url
         return None
 
+    # dict -> tenta chaves comuns
     if isinstance(raw, dict):
         for k in ("path", "url", "public_url", "publicUrl", "Key", "name"):
             if k in raw and raw[k]:
                 return _coerce_photo_value_to_public_url(raw[k])
         return None
 
+    # string
     s = str(raw).strip()
     if not s:
         return None
 
+    # tenta decodificar JSON (lista/dict) serializado em string
     if (s.startswith("[") and s.endswith("]")) or (
         s.startswith("{") and s.endswith("}")
     ):
@@ -229,17 +233,22 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
             j = json.loads(s)
             return _coerce_photo_value_to_public_url(j)
         except Exception:
+            # segue o fluxo com regex/normalização
             pass
 
+    # primeiro: se já tem uma URL http(s) dentro da string, usa a primeira
     m = _URL_RE.search(s)
     if m:
         return m.group(0)
 
+    # senão, tenta extrair um caminho de arquivo válido
     m = _PATH_RE.search(s)
     if m:
         rel = _normalize_supabase_relpath(m.group(0))
         return _public_url_from_storage_path(rel)
 
+    # por fim, se não casou com regex, trata a string inteira como caminho
+    # removendo colchetes/aspas soltas
     s_clean = s.strip(" \t\r\n'\"[]")
     if s_clean:
         rel = _normalize_supabase_relpath(s_clean)
@@ -249,10 +258,17 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
 
 
 def _member_photo_public_url(member_id: str) -> Optional[str]:
+    """
+    Resolve a foto pública do membro.
+    Prioridade:
+      1) Coluna definida em .env (MEMBERS_PHOTOS_COLUMN ou MEMBERS_PHOTO_COLUMN)
+      2) Fallbacks por convenção {member_id}.jpg|jpeg|png|webp (com/sem uploads/)
+    """
     col = getattr(settings, "MEMBERS_PHOTOS_COLUMN", None) or getattr(
         settings, "MEMBERS_PHOTO_COLUMN", None
     )
 
+    # 1) tabela/coluna
     if col:
         try:
             sb = get_supabase()
@@ -272,6 +288,7 @@ def _member_photo_public_url(member_id: str) -> Optional[str]:
         except Exception:
             pass
 
+    # 2) fallbacks
     candidates = [
         f"{member_id}.jpg",
         f"{member_id}.jpeg",
@@ -406,7 +423,7 @@ app = FastAPI(
             "description": "Reconhecimento facial: indexação, identificação, verificação e comparação.",
         },
     ],
-    # docs custom
+    # Desativa Swagger/Redoc nativos para usar a página /docs custom com cabeçalho
     docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -737,7 +754,7 @@ async def on_startup():
         print(f"[WARN] Falha ao reconstruir índice inicial: {e}")
 
 
-# monta os docs custom (depois de incluir TODAS as rotas)
+# Monta a página /docs custom (cabeçalho + Swagger UI)
 mount_docs_routes(app)
 
 

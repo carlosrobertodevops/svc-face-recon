@@ -7,6 +7,7 @@
 # - endpoints do microserviço de reconhecimento facial
 # =============================================================================
 
+# app/main.py
 from __future__ import annotations
 
 import asyncio
@@ -407,7 +408,284 @@ async def health():
 
 @app.get("/ready", tags=["ops"])
 async def ready():
-    return {"ready": True
+    return {"ready": True, "cache_embeddings": len(mem_index.embeddings)}
+
+@app.get("/ops/status", tags=["ops"])
+async def ops_status():
+    return {
+        "service": "svc-face-recon",
+        "threshold": settings.FACE_RECOGNITION_THRESHOLD,
+        "cache_embeddings": len(mem_index.embeddings),
+        "db_url_host_hint": settings.DATABASE_URL.split("@")[-1].split("/")[0]
+        if "@" in settings.DATABASE_URL
+        else settings.DATABASE_URL,
+    }
+
+# -----------------------------------------------------------------------------
+# FACE — JSON
+# -----------------------------------------------------------------------------
+
+@app.post("/index", response_model=IndexResponse, tags=["face"])
+async def index_all():
+    try:
+        result = await build_index_from_members()
+        return IndexResponse(ok=True, result=result)
+    except Exception as e:
+        return IndexResponse(ok=False, error=str(e))
+
+@app.post("/enroll", tags=["face"])
+async def enroll(req: EnrollRequest):
+    try:
+        b = await _fetch_image_bytes(
+            supabase_path=req.supabase_path,
+            image_url=req.image_url,
+            image_b64=req.image_b64,
+        )
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
+        upsert_member_embedding(req.member_id, face_engine.to_numpy(emb))
+        mem_index.rebuild()
+        return {"ok": True, "member_id": req.member_id}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/identify", response_model=IdentityResponse, tags=["face"])
+async def identity(req: IdentityRequest):
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        b = await _fetch_image_bytes(
+            supabase_path=req.supabase_path,
+            image_url=req.image_url,
+            image_b64=req.image_b64,
+        )
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            return IdentityResponse(ok=False, threshold=thr, candidates=[])
+        cands: List[Tuple[str, float]] = []
+        for mid, ref in mem_index.embeddings.items():
+            d = _distance(emb, ref.tolist())
+            cands.append((mid, d))
+        cands.sort(key=lambda x: x[1])
+        top = cands[: max(1, req.top_k)]
+        out: List[IdentityCandidate] = [
+            IdentityCandidate(
+                member_id=mid,
+                distance=dist,
+                matched=dist <= thr,
+                name=_fetch_member_name_from_supabase(mid),
+                photo_url=_member_photo_public_url(mid),
+            )
+            for mid, dist in top
+        ]
+        return IdentityResponse(ok=True, threshold=thr, candidates=out)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+@app.post("/verify", tags=["face"])
+async def verify(req: VerifyRequest):
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        ref = mem_index.embeddings.get(req.member_id)
+        if ref is None:
+            raise HTTPException(
+                status_code=404, detail="member_id sem embedding no cache/banco."
+            )
+        b = await _fetch_image_bytes(
+            supabase_path=req.supabase_path,
+            image_url=req.image_url,
+            image_b64=req.image_b64,
+        )
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
+        dist = _distance(emb, ref.tolist())
+        return {
+            "ok": True,
+            "member_id": req.member_id,
+            "name": _fetch_member_name_from_supabase(req.member_id),
+            "distance": dist,
+            "threshold": thr,
+            "matched": dist <= thr,
+            "photo_url": _member_photo_public_url(req.member_id),
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+@app.post("/compare", response_model=CompareResponse, tags=["face"])
+async def compare(req: CompareRequest):
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        a_bytes = await _fetch_image_bytes(
+            supabase_path=req.a_supabase_path,
+            image_url=req.a_image_url,
+            image_b64=req.a_image_b64,
+        )
+        b_bytes = await _fetch_image_bytes(
+            supabase_path=req.b_supabase_path,
+            image_url=req.b_image_url,
+            image_b64=req.b_image_b64,
+        )
+        emb_a = await _extract_single_embedding(a_bytes)
+        emb_b = await _extract_single_embedding(b_bytes)
+        if emb_a is None or emb_b is None:
+            raise HTTPException(
+                status_code=400, detail="Não foi possível extrair rosto em A ou B."
+            )
+        dist = _distance(emb_a, emb_b)
+        return CompareResponse(
+            ok=True,
+            distance=dist,
+            threshold=thr,
+            is_same=(dist <= thr),
+            a_preview_b64=_make_preview_data_url(a_bytes),
+            b_preview_b64=_make_preview_data_url(b_bytes),
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+# -----------------------------------------------------------------------------
+# FACE — MULTIPART/FILE (Swagger)
+# -----------------------------------------------------------------------------
+
+@app.post("/enroll/file", tags=["face"])
+async def enroll_file(
+    member_id: str = Form(...),
+    image: UploadFile = File(...),
+):
+    try:
+        b = await _read_upload_bytes(image)
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
+        upsert_member_embedding(member_id, face_engine.to_numpy(emb))
+        mem_index.rebuild()
+        return {"ok": True, "member_id": member_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+@app.post("/identify/file", response_model=IdentityResponse, tags=["face"])
+async def identity_file(
+    image: UploadFile = File(...),
+    top_k: int = Form(1, ge=1, le=10),
+):
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        b = await _read_upload_bytes(image)
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            return IdentityResponse(ok=False, threshold=thr, candidates=[])
+        cands: List[Tuple[str, float]] = []
+        for mid, ref in mem_index.embeddings.items():
+            d = _distance(emb, ref.tolist())
+            cands.append((mid, d))
+        cands.sort(key=lambda x: x[1])
+        top = cands[: max(1, top_k)]
+        out: List[IdentityCandidate] = [
+            IdentityCandidate(
+                member_id=mid,
+                distance=dist,
+                matched=dist <= thr,
+                name=_fetch_member_name_from_supabase(mid),
+                photo_url=_member_photo_public_url(mid),
+            )
+            for mid, dist in top
+        ]
+        return IdentityResponse(ok=True, threshold=thr, candidates=out)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+@app.post("/verify/file", tags=["face"])
+async def verify_file(
+    member_id: str = Form(...),
+    image: UploadFile = File(...),
+):
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        ref = mem_index.embeddings.get(member_id)
+        if ref is None:
+            raise HTTPException(
+                status_code=404, detail="member_id sem embedding no cache/banco."
+            )
+        b = await _read_upload_bytes(image)
+        emb = await _extract_single_embedding(b)
+        if emb is None:
+            raise HTTPException(status_code=400, detail="Nenhum rosto detectado.")
+        dist = _distance(emb, ref.tolist())
+        return {
+            "ok": True,
+            "member_id": member_id,
+            "name": _fetch_member_name_from_supabase(member_id),
+            "distance": dist,
+            "threshold": thr,
+            "matched": dist <= thr,
+            "photo_url": _member_photo_public_url(member_id),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+@app.post("/compare/files", response_model=CompareResponse, tags=["face"])
+async def compare_files(
+    image_a: UploadFile = File(...),
+    image_b: UploadFile = File(...),
+):
+    thr = float(settings.FACE_RECOGNITION_THRESHOLD)
+    try:
+        a_bytes = await _read_upload_bytes(image_a)
+        b_bytes = await _read_upload_bytes(image_b)
+        emb_a = await _extract_single_embedding(a_bytes)
+        emb_b = await _extract_single_embedding(b_bytes)
+        if emb_a is None or emb_b is None:
+            raise HTTPException(
+                status_code=400, detail="Não foi possível extrair rosto em A ou B."
+            )
+        dist = _distance(emb_a, emb_b)
+        return CompareResponse(
+            ok=True,
+            distance=dist,
+            threshold=thr,
+            is_same=(dist <= thr),
+            a_preview_b64=_make_preview_data_url(a_bytes),
+            b_preview_b64=_make_preview_data_url(b_bytes),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail:str(e))
+
+# -----------------------------------------------------------------------------
+# Startup
+# -----------------------------------------------------------------------------
+
+@app.on_event("startup")
+async def on_startup():
+    await asyncio.sleep(1.5)
+    try:
+        mem_index.rebuild()
+        print("[INFO] Índice em memória carregado a partir do banco.")
+    except Exception as e:
+        print(f"[WARN] Falha ao reconstruir índice inicial: {e}")
+
+# >>> ADIÇÃO: monta os docs custom (depois de incluir TODAS as rotas)
+mount_docs_routes(app)
 
 
 # # app/main.py

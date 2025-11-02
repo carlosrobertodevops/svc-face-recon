@@ -34,12 +34,13 @@ from .utils import (
 )
 from .face_engine import face_engine
 
-# >>> ADIÇÃO: importa o montador de docs custom
+# >>> docs custom
 from .docs import mount_docs_routes
 
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
+
 
 def _normalize_supabase_relpath(p: str) -> str:
     p = (p or "").strip().lstrip("/")
@@ -49,8 +50,10 @@ def _normalize_supabase_relpath(p: str) -> str:
         p = p.split("uploads/", 1)[1]
     return p
 
+
 _DRIVE_FILE_ID = re.compile(r"/d/([a-zA-Z0-9_-]+)")
 _DRIVE_ID_QUERY = re.compile(r"[?&]id=([a-zA-Z0-9_-]+)")
+
 
 def _to_google_drive_download(url: str) -> str:
     if "drive.google.com" not in url:
@@ -67,10 +70,12 @@ def _to_google_drive_download(url: str) -> str:
         return f"https://drive.google.com/uc?export=download&id={file_id}"
     return url
 
+
 async def _maybe_await(v):
     if hasattr(v, "__await__"):
         return await v
     return v
+
 
 async def _fetch_image_bytes(
     *,
@@ -121,11 +126,13 @@ async def _fetch_image_bytes(
 
     raise ValueError("Envie supabase_path, image_url ou image_b64.")
 
+
 async def _read_upload_bytes(file: UploadFile) -> bytes:
     data = await file.read()
     if not data:
         raise ValueError("Arquivo vazio.")
     return data
+
 
 async def _extract_single_embedding(img_bytes: bytes) -> Optional[List[float]]:
     img = load_image_from_bytes(img_bytes)
@@ -137,11 +144,13 @@ async def _extract_single_embedding(img_bytes: bytes) -> Optional[List[float]]:
         return None
     return emb.astype("float32").tolist()
 
+
 def _distance(emb_a: List[float], emb_b: List[float]) -> float:
     s = 0.0
     for x, y in zip(emb_a, emb_b):
         s += float(x) * float(y)
     return float(1.0 - s)
+
 
 def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
     try:
@@ -161,6 +170,7 @@ def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
         pass
     return None
 
+
 def _public_url_from_storage_path(relpath: str) -> Optional[str]:
     try:
         sb = get_supabase()
@@ -176,16 +186,21 @@ def _public_url_from_storage_path(relpath: str) -> Optional[str]:
         pass
     return None
 
+
 # ---------- FIX: normalizador robusto para a coluna `fotos_path` ---------------
 
 _URL_RE = re.compile(r"https?://[^\s'\"\]]+", re.IGNORECASE)
-_PATH_RE = re.compile(
-    r"(?:uploads/)?[^\s'\"\]]+\.(?:jpg|jpeg|png|webp)", re.IGNORECASE
-)
+_PATH_RE = re.compile(r"(?:uploads/)?[^\s'\"\]]+\.(?:jpg|jpeg|png|webp)", re.IGNORECASE)
+
 
 def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
     """
-    Converte o valor cru de `fotos_path` (ou equivalente) em uma URL pública.
+    Converte o valor cru de `fotos_path` (ou equivalente) em uma URL pública:
+    - aceita URL direta
+    - aceita caminho do Storage (com/sem 'uploads/')
+    - aceita string com colchetes/aspas
+    - tenta parsear JSON e pegar o primeiro caminho/URL
+    - aceita lista/tupla/dict Python
     """
     if raw is None:
         return None
@@ -207,7 +222,9 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
     if not s:
         return None
 
-    if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+    if (s.startswith("[") and s.endswith("]")) or (
+        s.startswith("{") and s.endswith("}")
+    ):
         try:
             j = json.loads(s)
             return _coerce_photo_value_to_public_url(j)
@@ -230,10 +247,12 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
 
     return None
 
+
 def _member_photo_public_url(member_id: str) -> Optional[str]:
     col = getattr(settings, "MEMBERS_PHOTOS_COLUMN", None) or getattr(
         settings, "MEMBERS_PHOTO_COLUMN", None
     )
+
     if col:
         try:
             sb = get_supabase()
@@ -270,6 +289,7 @@ def _member_photo_public_url(member_id: str) -> Optional[str]:
             return url
     return None
 
+
 def _make_preview_b64(img_bytes: bytes, max_side: int = 256) -> str:
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     im.thumbnail((max_side, max_side))
@@ -277,12 +297,15 @@ def _make_preview_b64(img_bytes: bytes, max_side: int = 256) -> str:
     im.save(buf, format="JPEG", quality=80)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
+
 def _make_preview_data_url(img_bytes: bytes, max_side: int = 256) -> str:
     return "data:image/jpeg;base64," + _make_preview_b64(img_bytes, max_side=max_side)
+
 
 # -----------------------------------------------------------------------------
 # Schemas (JSON) + novos campos de imagem
 # -----------------------------------------------------------------------------
+
 
 class IndexProgress(BaseModel):
     started_at: int
@@ -298,6 +321,7 @@ class IndexProgress(BaseModel):
     finished_at: Optional[int] = None
     percent: Optional[float] = None
 
+
 class IndexResult(BaseModel):
     total: int
     indexed: int
@@ -307,16 +331,19 @@ class IndexResult(BaseModel):
     cache_reloaded: bool
     progress: Optional[IndexProgress] = None
 
+
 class IndexResponse(BaseModel):
     ok: bool
     result: Optional[IndexResult] = None
     error: Optional[str] = None
+
 
 class IdentityRequest(BaseModel):
     supabase_path: Optional[str] = Field(None, description="Caminho/URL do Storage")
     image_url: Optional[str] = Field(None, description="URL pública (HTTP/HTTPS)")
     image_b64: Optional[str] = Field(None, description="Imagem em Base64")
     top_k: int = Field(1, ge=1, le=10, description="Quantos candidatos retornar")
+
 
 class IdentityCandidate(BaseModel):
     member_id: str
@@ -325,10 +352,12 @@ class IdentityCandidate(BaseModel):
     name: Optional[str] = None
     photo_url: Optional[str] = None  # NOVO
 
+
 class IdentityResponse(BaseModel):
     ok: bool
     threshold: float
     candidates: List[IdentityCandidate] = []
+
 
 class EnrollRequest(BaseModel):
     member_id: str
@@ -336,11 +365,13 @@ class EnrollRequest(BaseModel):
     image_url: Optional[str] = None
     image_b64: Optional[str] = None
 
+
 class VerifyRequest(BaseModel):
     member_id: str
     supabase_path: Optional[str] = None
     image_url: Optional[str] = None
     image_b64: Optional[str] = None
+
 
 class CompareRequest(BaseModel):
     a_supabase_path: Optional[str] = None
@@ -350,6 +381,7 @@ class CompareRequest(BaseModel):
     b_image_url: Optional[str] = None
     b_image_b64: Optional[str] = None
 
+
 class CompareResponse(BaseModel):
     ok: bool
     distance: float
@@ -357,6 +389,7 @@ class CompareResponse(BaseModel):
     is_same: bool
     a_preview_b64: Optional[str] = None  # NOVO
     b_preview_b64: Optional[str] = None  # NOVO
+
 
 # -----------------------------------------------------------------------------
 # FastAPI + CORS
@@ -373,7 +406,7 @@ app = FastAPI(
             "description": "Reconhecimento facial: indexação, identificação, verificação e comparação.",
         },
     ],
-    # >>> ADIÇÃO: desativa Swagger nativo para usar nosso /docs custom
+    # docs custom
     docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json",
@@ -391,9 +424,11 @@ app.add_middleware(
 # OPS
 # -----------------------------------------------------------------------------
 
+
 @app.get("/live", tags=["ops"])
 async def live():
     return {"status": "live"}
+
 
 @app.get("/health", tags=["ops"])
 async def health():
@@ -406,9 +441,11 @@ async def health():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+
 @app.get("/ready", tags=["ops"])
 async def ready():
     return {"ready": True, "cache_embeddings": len(mem_index.embeddings)}
+
 
 @app.get("/ops/status", tags=["ops"])
 async def ops_status():
@@ -421,9 +458,11 @@ async def ops_status():
         else settings.DATABASE_URL,
     }
 
+
 # -----------------------------------------------------------------------------
 # FACE — JSON
 # -----------------------------------------------------------------------------
+
 
 @app.post("/index", response_model=IndexResponse, tags=["face"])
 async def index_all():
@@ -432,6 +471,7 @@ async def index_all():
         return IndexResponse(ok=True, result=result)
     except Exception as e:
         return IndexResponse(ok=False, error=str(e))
+
 
 @app.post("/enroll", tags=["face"])
 async def enroll(req: EnrollRequest):
@@ -454,6 +494,7 @@ async def enroll(req: EnrollRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/identify", response_model=IdentityResponse, tags=["face"])
 async def identity(req: IdentityRequest):
     thr = float(settings.FACE_RECOGNITION_THRESHOLD)
@@ -466,12 +507,14 @@ async def identity(req: IdentityRequest):
         emb = await _extract_single_embedding(b)
         if emb is None:
             return IdentityResponse(ok=False, threshold=thr, candidates=[])
+
         cands: List[Tuple[str, float]] = []
         for mid, ref in mem_index.embeddings.items():
             d = _distance(emb, ref.tolist())
             cands.append((mid, d))
         cands.sort(key=lambda x: x[1])
         top = cands[: max(1, req.top_k)]
+
         out: List[IdentityCandidate] = [
             IdentityCandidate(
                 member_id=mid,
@@ -486,7 +529,8 @@ async def identity(req: IdentityRequest):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/verify", tags=["face"])
 async def verify(req: VerifyRequest):
@@ -520,7 +564,8 @@ async def verify(req: VerifyRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/compare", response_model=CompareResponse, tags=["face"])
 async def compare(req: CompareRequest):
@@ -556,11 +601,13 @@ async def compare(req: CompareRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # -----------------------------------------------------------------------------
 # FACE — MULTIPART/FILE (Swagger)
 # -----------------------------------------------------------------------------
+
 
 @app.post("/enroll/file", tags=["face"])
 async def enroll_file(
@@ -578,7 +625,8 @@ async def enroll_file(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/identify/file", response_model=IdentityResponse, tags=["face"])
 async def identity_file(
@@ -609,7 +657,8 @@ async def identity_file(
         ]
         return IdentityResponse(ok=True, threshold=thr, candidates=out)
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/verify/file", tags=["face"])
 async def verify_file(
@@ -640,7 +689,8 @@ async def verify_file(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/compare/files", response_model=CompareResponse, tags=["face"])
 async def compare_files(
@@ -669,11 +719,13 @@ async def compare_files(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail:str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # -----------------------------------------------------------------------------
 # Startup
 # -----------------------------------------------------------------------------
+
 
 @app.on_event("startup")
 async def on_startup():
@@ -684,7 +736,8 @@ async def on_startup():
     except Exception as e:
         print(f"[WARN] Falha ao reconstruir índice inicial: {e}")
 
-# >>> ADIÇÃO: monta os docs custom (depois de incluir TODAS as rotas)
+
+# monta os docs custom (depois de incluir TODAS as rotas)
 mount_docs_routes(app)
 
 

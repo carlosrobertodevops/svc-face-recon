@@ -1,5 +1,12 @@
+> ⚠️ **AVISO — DOCUMENTO LEGADO (rascunho).**
+> Este README descreve a concepção original do serviço com **Supabase + Storage + FlutterFlow 5**, hoje **DEPRECATED**.
+> **Stack atual (branch `svc-face-recon-fs`):** **PostgreSQL do mondaha** (embeddings `BYTEA` + tabela `membros`) + **MinIO/S3** (fotos) + **Redis** (opcional). Não há mais Supabase nem FlutterFlow.
+> **Fontes de verdade:** [`CLAUDE.md`](./CLAUDE.md) (operacional) e [`DOCKER.md`](./DOCKER.md) (Docker/integração mondaha). Trate as menções a Supabase/pgvector/FlutterFlow abaixo como histórico.
+
+---
+
 Perfeito, Carlos. 👌
-Vamos oficializar o nome **`svc-face-recon`** e estruturar o projeto completo nesse padrão — pronto para rodar como um **microserviço Dockerizado**, integrado ao **Supabase** e ao **FlutterFlow 5**.
+Vamos oficializar o nome **`svc-face-recon`** e estruturar o projeto completo nesse padrão — pronto para rodar como um **microserviço Dockerizado**, integrado ao **Supabase** e ao **FlutterFlow 5** *(concepção original — ver aviso de legado acima)*.
 
 ---
 

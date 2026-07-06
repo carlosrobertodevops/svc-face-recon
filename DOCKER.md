@@ -80,8 +80,10 @@ docker run --rm -p 8000:8000 \
 | MinIO / S3 | `minio:9000` |
 | Redis | `redis:6379` |
 
-- **Healthcheck:** `curl -f http://localhost:8000/health` (retorna `{"ok":true}` após `SELECT 1`).
-- **Rotas consumidas pelo mondaha:** `POST /identify/file`, `GET /ready`, `POST /index`.
+- **Healthcheck:** `curl -f http://localhost:8000/health` (retorna `{"ok":true}` após `SELECT 1`). No `docker-compose.yml` raiz do mondaha o serviço `svc-face-recon` define esse healthcheck e o serviço `app` usa `depends_on: { svc-face-recon: { condition: service_healthy } }` — o `app` só sobe quando o svc está saudável.
+- **Build no compose do mondaha:** o serviço embutido usa `build` apontando para `../svc-face-recon/Dockerfile` → porta **8000** (não `Dockerfile.prod`, que usa 8001).
+- **Rotas consumidas pelo mondaha:** `POST /identify/file` (multipart), `GET /ready`, `POST /index`. Chamadas **server-only** (BFF), nunca expostas ao browser.
+- **Envs do lado mondaha** (serviço `app`): `FACE_SERVICE_URL=http://svc-face-recon:8000` (era `https://svc-face-recon.mondaha.com`), `FACE_SERVICE_THRESHOLD`, `FACE_SERVICE_TIMEOUT_MS` (timeout do cliente, agora configurável — antes hardcoded 15s).
 
 ---
 

@@ -146,7 +146,20 @@ Gera e indexa embeddings faciais das fotos dos membros e responde consultas de i
 | **Standalone + monitoring** | `docker-compose.local.yaml` | Bridge de monitoramento. |
 | **Deploy Coolify** | `docker-compose.coolify.yaml` | |
 
-> **Regra de consumo:** dentro da rede mondaha, o monorepo chama o serviço por **DNS interno** `http://svc-face-recon:8000` (BFF server-only). Rotas efetivamente usadas: `POST /identify/file`, `GET /ready`, `POST /index`.
+> **Regra de consumo:** dentro da rede mondaha, o monorepo chama o serviço por **DNS interno** `http://svc-face-recon:8000` (BFF server-only, **nunca exposto ao browser**). Rotas efetivamente usadas: `POST /identify/file`, `GET /ready`, `POST /index`.
+
+### Configuração do lado mondaha
+
+O adapter/BFF do mondaha lê estas envs (definidas no serviço `app` do `docker-compose.yml` raiz do monorepo):
+
+| Env (mondaha) | Valor | Observação |
+|---|---|---|
+| `FACE_SERVICE_URL` | `http://svc-face-recon:8000` | DNS interno docker. **Era** `https://svc-face-recon.mondaha.com` (público) — migrado para consumo interno. |
+| `FACE_SERVICE_THRESHOLD` | ex.: `0.35` | Threshold usado pelo cliente. |
+| `FACE_SERVICE_TIMEOUT_MS` | ex.: `15000` | Timeout do fetch. **Agora configurável** (antes hardcoded 15s no adapter). |
+
+- **Healthcheck no compose do mondaha:** o serviço `svc-face-recon` ganhou `healthcheck` (`curl -f http://localhost:8000/health`) e o serviço `app` passou a `depends_on: { svc-face-recon: { condition: service_healthy } }`. O `/health` faz `SELECT 1` no Postgres antes de reportar saudável.
+- **Build no compose do mondaha:** usa `build` apontando para `../svc-face-recon/Dockerfile` (porta **8000**).
 
 Detalhes completos de Docker em **[DOCKER.md](./DOCKER.md)**.
 

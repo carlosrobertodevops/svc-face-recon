@@ -37,6 +37,9 @@ from .face_engine import face_engine
 # Cabeçalho/Swagger custom
 from .docs import mount_docs_routes
 
+# Métricas Prometheus
+from prometheus_fastapi_instrumentator import Instrumentator
+
 # -----------------------------------------------------------------------------
 # Helpers
 # -----------------------------------------------------------------------------
@@ -413,6 +416,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Expõe /metrics em formato Prometheus (text exposition)
+Instrumentator().instrument(app).expose(
+    app, endpoint="/metrics", include_in_schema=False
 )
 
 # -----------------------------------------------------------------------------

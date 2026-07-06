@@ -1,0 +1,137 @@
+{
+  "app/__init__.py": {
+    "mtime": 1783343950.6914482,
+    "ast_hash": "e5c22b31478045a54437cd8b60a49fb2",
+    "semantic_hash": ""
+  },
+  "app/__tests__/test_api.py": {
+    "mtime": 1783343950.6916478,
+    "ast_hash": "28d1dc9c54b243116a30a1d8689f4877",
+    "semantic_hash": ""
+  },
+  "app/__tests__/test_embeddings.py": {
+    "mtime": 1783343950.691776,
+    "ast_hash": "781778e6fa6cfc61bcd3c153cd450520",
+    "semantic_hash": ""
+  },
+  "app/cache.py": {
+    "mtime": 1783343950.6918995,
+    "ast_hash": "e5c18c8f299472e1a8d5c0e99843cf52",
+    "semantic_hash": ""
+  },
+  "app/config.py": {
+    "mtime": 1783347208.8042452,
+    "ast_hash": "560ea5da87e2a1bebec35be00f3cd1e1",
+    "semantic_hash": ""
+  },
+  "app/docs.py": {
+    "mtime": 1783343950.6922314,
+    "ast_hash": "64e0f729a8bfcff598f6f4e25152b364",
+    "semantic_hash": ""
+  },
+  "app/face_engine.py": {
+    "mtime": 1783343950.6923785,
+    "ast_hash": "335bf22f4ca2510ee21afd3e4536979d",
+    "semantic_hash": ""
+  },
+  "app/indexer.py": {
+    "mtime": 1783347284.4971397,
+    "ast_hash": "f66736280c4cca704e51fe74ff42b15b",
+    "semantic_hash": ""
+  },
+  "app/main.py": {
+    "mtime": 1783349623.9418077,
+    "ast_hash": "fe01d7d24e530e520c19173d2c0ec5d3",
+    "semantic_hash": ""
+  },
+  "app/repository.py": {
+    "mtime": 1783347233.1938086,
+    "ast_hash": "ed53b9401d95d5d1a06e3d7e2731b27f",
+    "semantic_hash": ""
+  },
+  "app/schemas.py": {
+    "mtime": 1783343950.6930146,
+    "ast_hash": "687805eba9287e4ea13af1b1a9c02c5b",
+    "semantic_hash": ""
+  },
+  "app/storage.py": {
+    "mtime": 1783347269.8236122,
+    "ast_hash": "fdba40c6f2980d77489143868b6f0fa4",
+    "semantic_hash": ""
+  },
+  "app/supabase_client.py": {
+    "mtime": 1783347298.5763993,
+    "ast_hash": "381c983ac20e05b456c72c5da04e1c2f",
+    "semantic_hash": ""
+  },
+  "app/utils.py": {
+    "mtime": 1783347254.0481973,
+    "ast_hash": "ebd08d51619182cef22b320deb364cb7",
+    "semantic_hash": ""
+  },
+  "observability/grafana/provisioning/dashboards/fastapi-overview.json": {
+    "mtime": 1783343950.6941657,
+    "ast_hash": "08d748dff5cdc233cf4ae42f33c44c5a",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1783343950.691221,
+    "ast_hash": "1a5453b6a4f191aed30d4e1fdd04b3e1",
+    "semantic_hash": ""
+  },
+  "docker-compose.coolify.yaml": {
+    "mtime": 1783343950.6933656,
+    "ast_hash": "088794955f1cafe78f7234b64b091b84",
+    "semantic_hash": ""
+  },
+  "docker-compose.local.yaml": {
+    "mtime": 1783343950.6935835,
+    "ast_hash": "b376475b4e61f74e2a6efa514b7ebc8f",
+    "semantic_hash": ""
+  },
+  "docker-compose.mondaha.yml": {
+    "mtime": 1783347371.2777307,
+    "ast_hash": "5b15d2bede5a201604b8c541502b28a9",
+    "semantic_hash": ""
+  },
+  "docker-compose.yaml": {
+    "mtime": 1783343950.6937125,
+    "ast_hash": "51a51f3acf63adcb457a1862ba6ed468",
+    "semantic_hash": ""
+  },
+  "observability/grafana/provisioning/dashboards/dashboards.yml": {
+    "mtime": 1783343950.6940467,
+    "ast_hash": "052609c022c885bf59b7fb7e61ccaeb7",
+    "semantic_hash": ""
+  },
+  "observability/grafana/provisioning/datasources/datasource.yml": {
+    "mtime": 1783343950.6943426,
+    "ast_hash": "e9dc5485099a685f803b4db4613f8a00",
+    "semantic_hash": ""
+  },
+  "observability/prometheus/prometheus.yml": {
+    "mtime": 1783343950.6945372,
+    "ast_hash": "66f37d738282a652336bdee0dcfada7e",
+    "semantic_hash": ""
+  },
+  "requirements-lock.txt": {
+    "mtime": 1783343950.6948283,
+    "ast_hash": "a42dce1ae0b23205673590313fc66862",
+    "semantic_hash": ""
+  },
+  "requirements.local.txt": {
+    "mtime": 1783343950.6950107,
+    "ast_hash": "d2cbd117d93572d7ba797880bec3880c",
+    "semantic_hash": ""
+  },
+  "requirements.prod.txt": {
+    "mtime": 1783343950.6951287,
+    "ast_hash": "753894553b9969bc15301438aa2ae6f1",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1783347294.99292,
+    "ast_hash": "fa6e9ae7ceab3396179be29daf27ad4a",
+    "semantic_hash": ""
+  }
+}

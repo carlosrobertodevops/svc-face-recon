@@ -1,14 +1,5 @@
-# app/supabase_client.py
-from supabase import create_client, Client
-from .config import settings
-
-_sb_client: Client | None = None
+# DEPRECATED: Supabase removido (migração Postgres+MinIO). Módulo mantido vazio para evitar ImportError legado.
 
 
-def get_supabase() -> Client:
-    global _sb_client
-    if _sb_client is None:
-        _sb_client = create_client(
-            settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY
-        )
-    return _sb_client
+def get_supabase(*a, **k):
+    raise RuntimeError("Supabase removido — use repository/storage")

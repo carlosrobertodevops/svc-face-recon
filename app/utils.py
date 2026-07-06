@@ -8,7 +8,7 @@ from PIL import Image
 import httpx
 
 from .config import settings
-from .supabase_client import get_supabase
+from .storage import fetch_bytes as s3_fetch_bytes
 
 PUBLIC_OBJ_RE = re.compile(r"/storage/v1/object/public/([^/]+)/(.+)$", re.IGNORECASE)
 
@@ -26,14 +26,11 @@ async def fetch_bytes_from_url(url: str) -> bytes:
 
 def fetch_bytes_from_supabase_path(path: str) -> bytes:
     """
-    Baixa arquivo do Supabase Storage via SDK (com service role key).
-    Ex.: path = 'membros/123.jpg' dentro do bucket settings.SUPABASE_STORAGE_BUCKET
+    Baixa arquivo do MinIO pela key.
+    Ex.: path = 'membros/123.jpg' (key MinIO)
+    Nome mantido por compatibilidade com chamadores existentes.
     """
-    sb = get_supabase()
-    res = sb.storage.from_(settings.SUPABASE_STORAGE_BUCKET).download(path)
-    if isinstance(res, bytes):
-        return res
-    return bytes(res)
+    return s3_fetch_bytes(path)
 
 
 def public_url_to_storage_path(url: str) -> Optional[tuple[str, str]]:
@@ -59,21 +56,18 @@ async def resolve_image_source(
     Resolve uma fonte de imagem:
       - file_bytes (multipart)
       - image_url: URL pública/assinada (http/https)
-      - supabase_path: caminho relativo dentro do bucket (ex.: 'membros/xyz.jpg')
-      - se image_url for URL pública do Supabase, converte para path e baixa via SDK
+      - supabase_path: caminho relativo / key (ex.: 'membros/xyz.jpg')
+      - se image_url for URL pública do Supabase, extrai a key e baixa do MinIO
     """
     if file_bytes:
         return file_bytes
 
     if image_url:
-        # Se for URL pública do Supabase, prefira baixar via SDK (mais confiável)
+        # Se for URL pública do Supabase, extrai a key e baixa do MinIO
         parsed = public_url_to_storage_path(image_url)
         if parsed:
-            bucket, rel = parsed
-            # se bucket não for o mesmo, ainda tentaremos pelo SDK (sobrescreva via env se quiser)
-            sb = get_supabase()
-            res = sb.storage.from_(bucket).download(rel)
-            return res if isinstance(res, bytes) else bytes(res)
+            _bucket, rel = parsed
+            return s3_fetch_bytes(rel)
         # caso contrário, baixa via HTTP normal
         return await fetch_bytes_from_url(image_url)
 

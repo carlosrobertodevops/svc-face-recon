@@ -24,8 +24,8 @@ from PIL import Image
 
 from .config import settings
 from .indexer import mem_index, build_index_from_members
+from . import repository, storage
 from .repository import get_conn, upsert_member_embedding
-from .supabase_client import get_supabase
 from .utils import (
     load_image_from_bytes,
     fetch_bytes_from_supabase_path,
@@ -154,37 +154,16 @@ def _distance(emb_a: List[float], emb_b: List[float]) -> float:
 
 def _fetch_member_name_from_supabase(member_id: str) -> Optional[str]:
     try:
-        sb = get_supabase()
-        sel = f"{settings.MEMBERS_NAME_COLUMN}"
-        resp = (
-            sb.table(settings.MEMBERS_TABLE)
-            .select(sel)
-            .eq(settings.MEMBERS_ID_COLUMN, member_id)
-            .limit(1)
-            .execute()
-        )
-        rows = resp.data or []
-        if rows:
-            return rows[0].get(settings.MEMBERS_NAME_COLUMN)
+        return repository.fetch_member_name(member_id)
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _public_url_from_storage_path(relpath: str) -> Optional[str]:
     try:
-        sb = get_supabase()
-        res = sb.storage.from_(settings.SUPABASE_STORAGE_BUCKET).get_public_url(relpath)
-        if isinstance(res, dict):
-            data = res.get("data") or {}
-            url = data.get("publicUrl") or data.get("publicURL")
-            if url:
-                return url
-        elif isinstance(res, str):
-            return res
+        return storage.presigned_url(relpath)
     except Exception:
-        pass
-    return None
+        return None
 
 
 # ---------- FIX: normalizador robusto para a coluna `fotos_path` ---------------
@@ -259,32 +238,31 @@ def _coerce_photo_value_to_public_url(raw: Any) -> Optional[str]:
 
 def _member_photo_public_url(member_id: str) -> Optional[str]:
     """
-    Resolve a foto pública do membro.
+    Resolve a foto pública (presigned MinIO) do membro.
     Prioridade:
-      1) Coluna definida em .env (MEMBERS_PHOTOS_COLUMN ou MEMBERS_PHOTO_COLUMN)
+      1) Primeira key não-vazia de `fotos_path` (list/str) -> presigned_url
       2) Fallbacks por convenção {member_id}.jpg|jpeg|png|webp (com/sem uploads/)
     """
-    col = getattr(settings, "MEMBERS_PHOTOS_COLUMN", None) or getattr(
-        settings, "MEMBERS_PHOTO_COLUMN", None
-    )
+    # 1) fotos_path do membro (Postgres)
+    try:
+        raw = repository.fetch_member_photos(member_id)
+    except Exception:
+        raw = None
 
-    # 1) tabela/coluna
-    if col:
+    key: Optional[str] = None
+    if isinstance(raw, (list, tuple)):
+        for it in raw:
+            if it and str(it).strip():
+                key = str(it).strip()
+                break
+    elif isinstance(raw, str):
+        key = raw.strip() or None
+
+    if key:
         try:
-            sb = get_supabase()
-            resp = (
-                sb.table(settings.MEMBERS_TABLE)
-                .select(col)
-                .eq(settings.MEMBERS_ID_COLUMN, member_id)
-                .limit(1)
-                .execute()
-            )
-            rows = resp.data or []
-            if rows:
-                raw = (rows[0] or {}).get(col)
-                url = _coerce_photo_value_to_public_url(raw)
-                if url:
-                    return url
+            url = storage.presigned_url(key)
+            if url:
+                return url
         except Exception:
             pass
 

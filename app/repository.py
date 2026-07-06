@@ -89,3 +89,67 @@ def fetch_all_embeddings() -> List[Tuple[str, np.ndarray]]:
                 vec = vec.astype(np.float32)
             out.append((str(member_id), vec))
     return out
+
+
+def fetch_all_members() -> list[dict]:
+    """
+    Lê a tabela de membros diretamente do Postgres (substitui o Supabase PostgREST).
+    SELECT membro_id, nome_completo, fotos_path FROM membros;
+    Retorna lista de dicts cujas chaves são os nomes de coluna configurados
+    (settings.MEMBERS_ID_COLUMN / NAME_COLUMN / PHOTOS_COLUMN).
+    """
+    id_col = settings.MEMBERS_ID_COLUMN
+    name_col = settings.MEMBERS_NAME_COLUMN
+    photos_col = settings.MEMBERS_PHOTOS_COLUMN
+    sql = (
+        f"SELECT {id_col}, {name_col}, {photos_col} "
+        f"FROM {settings.MEMBERS_TABLE};"
+    )
+    out: list[dict] = []
+    with get_conn() as conn, conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute(sql)
+        for member_id, nome, fotos in cur.fetchall():
+            out.append(
+                {
+                    id_col: member_id,
+                    name_col: nome,
+                    photos_col: fotos,
+                }
+            )
+    return out
+
+
+def fetch_member_name(member_id) -> str | None:
+    """
+    SELECT nome_completo FROM membros WHERE membro_id=%s LIMIT 1.
+    Retorna None se não encontrar.
+    """
+    sql = (
+        f"SELECT {settings.MEMBERS_NAME_COLUMN} "
+        f"FROM {settings.MEMBERS_TABLE} "
+        f"WHERE {settings.MEMBERS_ID_COLUMN} = %s LIMIT 1;"
+    )
+    with get_conn() as conn, conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute(sql, (member_id,))
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return row[0]
+
+
+def fetch_member_photos(member_id):
+    """
+    SELECT fotos_path FROM membros WHERE membro_id=%s LIMIT 1.
+    Retorna o valor bruto de fotos_path (list/str/None) ou None se não encontrar.
+    """
+    sql = (
+        f"SELECT {settings.MEMBERS_PHOTOS_COLUMN} "
+        f"FROM {settings.MEMBERS_TABLE} "
+        f"WHERE {settings.MEMBERS_ID_COLUMN} = %s LIMIT 1;"
+    )
+    with get_conn() as conn, conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute(sql, (member_id,))
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return row[0]

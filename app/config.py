@@ -39,14 +39,25 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
-    # -------- Supabase --------
-    SUPABASE_URL: str
-    SUPABASE_SERVICE_ROLE_KEY: str
+    # -------- Supabase (DEPRECATED: migrado para MinIO/Postgres) --------
+    SUPABASE_URL: str | None = None
+    SUPABASE_SERVICE_ROLE_KEY: str | None = None
     SUPABASE_ANON_KEY: str | None = None
-    SUPABASE_STORAGE_BUCKET: str = "uploads"
+    SUPABASE_STORAGE_BUCKET: str | None = None  # DEPRECATED: migrado para MinIO/Postgres
 
     # -------- Postgres --------
     DATABASE_URL: str
+
+    # -------- S3 / MinIO --------
+    S3_ENDPOINT: str = "http://minio:9000"           # interno (container)
+    S3_PUBLIC_ENDPOINT: str = "http://localhost:9000"  # navegador (presigned)
+    S3_REGION: str = "us-east-1"
+    S3_BUCKET: str = "uploads"
+    S3_ACCESS_KEY: str = "minioadmin"
+    S3_SECRET_KEY: str = "minioadmin"
+
+    # -------- Redis (cache do indexer) --------
+    REDIS_URL: str | None = None
 
     # -------- Face --------
     FACE_RECOGNITION_THRESHOLD: float = Field(0.35)

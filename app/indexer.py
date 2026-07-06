@@ -7,10 +7,13 @@ import json
 import time
 import numpy as np
 
-from .supabase_client import get_supabase
 from .config import settings
 from .face_engine import face_engine
-from .repository import upsert_member_embedding, fetch_all_embeddings
+from .repository import (
+    upsert_member_embedding,
+    fetch_all_embeddings,
+    fetch_all_members,
+)
 from .utils import (
     load_image_from_bytes,
     fetch_bytes_from_supabase_path,
@@ -235,16 +238,14 @@ async def _get_bytes(kind: str, value: str) -> bytes:
 
 async def build_index_from_members() -> dict:
     """
-    Lê tabela configurada no Supabase, baixa fotos, gera embedding médio por membro,
-    upserta no Postgres e recarrega o cache.
+    Lê membros do Postgres (repository.fetch_all_members), baixa fotos do MinIO,
+    gera embedding médio por membro, upserta no Postgres e recarrega o cache.
 
     Recursos novos:
       - Lock via Redis (key: index:lock)
       - Progresso em Redis (key: index:status)
       - Cache de bytes de imagens (chave img:SHA256)
     """
-    sb = get_supabase()
-
     # chaves de controle no Redis
     rds = await _get_redis()
     lock_key = "index:lock"
@@ -278,9 +279,7 @@ async def build_index_from_members() -> dict:
     await _set_status(rds, status_key, status)
 
     try:
-        sel_cols = f"{settings.MEMBERS_ID_COLUMN}, {settings.MEMBERS_NAME_COLUMN}, {settings.MEMBERS_PHOTOS_COLUMN}"
-        resp = sb.table(settings.MEMBERS_TABLE).select(sel_cols).execute()
-        rows = resp.data or []
+        rows = fetch_all_members()
 
         total = len(rows)
         status["total"] = total
